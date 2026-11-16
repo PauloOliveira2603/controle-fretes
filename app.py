@@ -17,6 +17,7 @@ def salvar_aba(aba, df):
 
 if "logado" not in st.session_state:
     st.session_state.logado = False
+        st.session_state.usuario = "" 
     st.session_state.nome = ""
     st.session_state.perfil = ""
 
@@ -31,6 +32,7 @@ if not st.session_state.logado:
         match = df_u[(df_u["username"] == user.strip()) & (df_u["senha"] == pwd.strip())]
         if not match.empty:
             st.session_state.logado = True
+                     st.session_state.usuario = str(match.iloc[0]["username"]).strip()
             st.session_state.nome = match.iloc[0]["nome"]
             st.session_state.perfil = match.iloc[0]["perfil"]
             st.rerun()
@@ -38,14 +40,23 @@ if not st.session_state.logado:
             st.error("Usuário ou senha inválidos.")
     st.stop()
 
+eh_admin = (st.session_state.perfil == "admin")
+
 st.sidebar.title(f"Olá, {st.session_state.nome}")
+st.sidebar.caption(f"Perfil: {'Administrador' if eh_admin else 'Operador'}")
+
+
 menu = ["Lançamentos do Dia", "Relatórios e Gráficos"]
 if st.session_state.perfil == "admin":
     menu.append("Administração")
 
 opcao = st.sidebar.radio("Menu", menu)
+
 if st.sidebar.button("Sair"):
     st.session_state.logado = False
+    st.session_state.usuario = ""
+    st.session_state.nome = ""
+    st.session_state.perfil = ""
     st.rerun()
 
 if opcao == "Lançamentos do Dia":
