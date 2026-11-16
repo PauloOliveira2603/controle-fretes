@@ -15,6 +15,20 @@ def ler_aba(aba):
 def salvar_aba(aba, df):
     conn.update(worksheet=aba, data=df)
 
+def converter_moeda(texto):
+    if not texto or not str(texto).strip():
+        return 0.0
+    limpo = str(texto).replace("R$", "").replace(" ", "").strip()
+    if "," in limpo and "." in limpo:
+        limpo = limpo.replace(".", "").replace(",", ".")
+    elif "," in limpo:
+        limpo = limpo.replace(",", ".")
+    try:
+        val = float(limpo)
+        return max(0.0, val)
+    except ValueError:
+        return None
+
 if "logado" not in st.session_state:
     st.session_state.logado = False
     st.session_state.nome = ""
@@ -63,7 +77,6 @@ if opcao == "Lançamentos do Dia":
     if not df_lanc.empty:
         df_lanc["usuario"] = df_lanc["usuario"].astype(str).str.strip()
 
-    # Filtro de visualização na tela diária (Admin pode escolher todos ou um motorista)
     usuario_filtro_dia = usuario_atual
     if eh_admin:
         df_u_lista = ler_aba("usuarios")
@@ -73,7 +86,6 @@ if opcao == "Lançamentos do Dia":
         opcoes_filtro = ["Todos os Usuários"] + nomes_cadastrados
         usuario_filtro_dia = st.selectbox("👤 Visualizar dados de:", opcoes_filtro)
 
-    # Busca valores atuais de Caixa e Diária do usuário sem gravar nada automaticamente na planilha
     caixa_existente = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CAIXA") & (df_lanc["usuario"] == usuario_atual)] if not df_lanc.empty else pd.DataFrame()
     diaria_existente = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "DIARIA") & (df_lanc["usuario"] == usuario_atual)] if not df_lanc.empty else pd.DataFrame()
 
@@ -82,41 +94,47 @@ if opcao == "Lançamentos do Dia":
 
     st.subheader(f"1. Caixa e Diária ({usuario_atual})")
     c_f1, c_f2 = st.columns(2)
-    val_caixa = c_f1.number_input("💰 Dinheiro em Caixa (R$)", value=valor_inicial_caixa, step=1.0)
-    val_diaria = c_f2.number_input("📅 Diária do Dia (R$)", value=valor_inicial_diaria, step=5.0)
-    
-    # Só grava Caixa e Diária na planilha quando clicar no botão abaixo
+    str_caixa = c_f1.text_input("💰 Dinheiro em Caixa (R$)", value=f"{valor_inicial_caixa:.2f}".replace(".", ",") if valor_inicial_caixa > 0 else "", placeholder="0,00")
+    str_diaria = c_f2.text_input("📅 Diária do Dia (R$)", value=f"{valor_inicial_diaria:.2f}".replace(".", ",") if valor_inicial_diaria > 0 else "", placeholder="0,00")
+
+    val_caixa_num = converter_moeda(str_caixa)
+    val_diaria_num = converter_moeda(str_diaria)
+    val_caixa = val_caixa_num if val_caixa_num is not None else 0.0
+    val_diaria = val_diaria_num if val_diaria_num is not None else 0.0
+
     if st.button("Salvar Caixa e Diária", use_container_width=True):
-        with st.spinner("Salvando Caixa e Diária..."):
-            df_atual = ler_aba("lancamentos")
-            if not df_atual.empty:
-                df_atual["usuario"] = df_atual["usuario"].astype(str).str.strip()
-            agora = datetime.now().strftime("%d/%m/%Y %H:%M")
+        if val_caixa_num is None or val_diaria_num is None:
+            st.error("Digite valores numéricos válidos para Caixa e Diária (Ex: 50 ou 50,00).")
+        else:
+            with st.spinner("Salvando Caixa e Diária..."):
+                df_atual = ler_aba("lancamentos")
+                if not df_atual.empty:
+                    df_atual["usuario"] = df_atual["usuario"].astype(str).str.strip()
+                agora = datetime.now().strftime("%d/%m/%Y %H:%M")
 
-            idx_c = df_atual[(df_atual["data_ref"] == data_str) & (df_atual["tipo"] == "CAIXA") & (df_atual["usuario"] == usuario_atual)].index if not df_atual.empty else []
-            idx_d = df_atual[(df_atual["data_ref"] == data_str) & (df_atual["tipo"] == "DIARIA") & (df_atual["usuario"] == usuario_atual)].index if not df_atual.empty else []
+                idx_c = df_atual[(df_atual["data_ref"] == data_str) & (df_atual["tipo"] == "CAIXA") & (df_atual["usuario"] == usuario_atual)].index if not df_atual.empty else []
+                idx_d = df_atual[(df_atual["data_ref"] == data_str) & (df_atual["tipo"] == "DIARIA") & (df_atual["usuario"] == usuario_atual)].index if not df_atual.empty else []
 
-            if len(idx_c) > 0:
-                df_atual.loc[idx_c, ["dinheiro", "usuario", "data_hora"]] = [val_caixa, usuario_atual, agora]
-            else:
-                novo_id = 1 if df_atual.empty else int(df_atual["id"].max()) + 1
-                nova_c = pd.DataFrame([{"id": novo_id, "data_ref": data_str, "tipo": "CAIXA", "qtd": 0, "local": "Caixa", "dinheiro": val_caixa, "pix_bradesco": 0.0, "pix_stones": 0.0, "cartao": 0.0, "gorjetas": 0.0, "despesas": 0.0, "obs": "", "extras": "{}", "usuario": usuario_atual, "data_hora": agora}])
-                df_atual = pd.concat([df_atual, nova_c], ignore_index=True)
+                if len(idx_c) > 0:
+                    df_atual.loc[idx_c, ["dinheiro", "usuario", "data_hora"]] = [val_caixa, usuario_atual, agora]
+                else:
+                    novo_id = 1 if df_atual.empty else int(df_atual["id"].max()) + 1
+                    nova_c = pd.DataFrame([{"id": novo_id, "data_ref": data_str, "tipo": "CAIXA", "qtd": 0, "local": "Caixa", "dinheiro": val_caixa, "pix_bradesco": 0.0, "pix_stones": 0.0, "cartao": 0.0, "gorjetas": 0.0, "despesas": 0.0, "obs": "", "extras": "{}", "usuario": usuario_atual, "data_hora": agora}])
+                    df_atual = pd.concat([df_atual, nova_c], ignore_index=True)
 
-            if len(idx_d) > 0:
-                df_atual.loc[idx_d, ["dinheiro", "usuario", "data_hora"]] = [-abs(val_diaria), usuario_atual, agora]
-            else:
-                novo_id = 1 if df_atual.empty else int(df_atual["id"].max()) + 1
-                nova_d = pd.DataFrame([{"id": novo_id, "data_ref": data_str, "tipo": "DIARIA", "qtd": 0, "local": "Diária", "dinheiro": -abs(val_diaria), "pix_bradesco": 0.0, "pix_stones": 0.0, "cartao": 0.0, "gorjetas": 0.0, "despesas": 0.0, "obs": "", "extras": "{}", "usuario": usuario_atual, "data_hora": agora}])
-                df_atual = pd.concat([df_atual, nova_d], ignore_index=True)
+                if len(idx_d) > 0:
+                    df_atual.loc[idx_d, ["dinheiro", "usuario", "data_hora"]] = [-abs(val_diaria), usuario_atual, agora]
+                else:
+                    novo_id = 1 if df_atual.empty else int(df_atual["id"].max()) + 1
+                    nova_d = pd.DataFrame([{"id": novo_id, "data_ref": data_str, "tipo": "DIARIA", "qtd": 0, "local": "Diária", "dinheiro": -abs(val_diaria), "pix_bradesco": 0.0, "pix_stones": 0.0, "cartao": 0.0, "gorjetas": 0.0, "despesas": 0.0, "obs": "", "extras": "{}", "usuario": usuario_atual, "data_hora": agora}])
+                    df_atual = pd.concat([df_atual, nova_d], ignore_index=True)
 
-            salvar_aba("lancamentos", df_atual)
-        st.success("Caixa e Diária salvos com sucesso!")
-        st.rerun()
+                salvar_aba("lancamentos", df_atual)
+            st.success("Caixa e Diária salvos com sucesso!")
+            st.rerun()
 
     st.divider()
 
-    # Numeração da corrida baseada no usuário que está lançando
     df_c_dia_user = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CORRIDA") & (df_lanc["usuario"] == usuario_atual)] if not df_lanc.empty else pd.DataFrame()
     proxima_corrida = len(df_c_dia_user) + 1
 
@@ -124,23 +142,40 @@ if opcao == "Lançamentos do Dia":
     with st.form("novo_reg", clear_on_submit=True):
         st.info(f"🔢 **Corrida automática do dia:** Nº {proxima_corrida}")
         local = st.text_input("Local / Descrição (Ex: Piriquito, Gasolina)")
-        dinheiro = st.number_input("Dinheiro (R$)", min_value=0.0, step=1.0)
-        pix_brad = st.number_input("PIX Bradesco (R$)", min_value=0.0, step=1.0)
-        pix_ston = st.number_input("PIX Stones (R$)", min_value=0.0, step=1.0)
-        cartao = st.number_input("Cartão (R$)", min_value=0.0, step=1.0)
-        gorjetas = st.number_input("Gorjetas (R$)", min_value=0.0, step=1.0)
-        despesas = st.number_input("Despesas - Gasolina/Manut. (R$)", min_value=0.0, step=1.0)
+        dinheiro_txt = st.text_input("Dinheiro (R$)", placeholder="0,00")
+        pix_brad_txt = st.text_input("PIX Bradesco (R$)", placeholder="0,00")
+        pix_ston_txt = st.text_input("PIX Stones (R$)", placeholder="0,00")
+        cartao_txt = st.text_input("Cartão (R$)", placeholder="0,00")
+        gorjetas_txt = st.text_input("Gorjetas (R$)", placeholder="0,00")
+        despesas_txt = st.text_input("Despesas - Gasolina/Manut. (R$)", placeholder="0,00")
         obs = st.text_input("Observação")
 
-        extras_dict = {}
+        extras_txt_dict = {}
         for col_n in lista_extras:
-            extras_dict[col_n] = st.number_input(f"{col_n} (R$)", min_value=0.0, step=1.0)
+            extras_txt_dict[col_n] = st.text_input(f"{col_n} (R$)", placeholder="0,00")
 
-        # Gravação ocorre SOMENTE ao clicar neste botão
         enviado = st.form_submit_button("➕ Adicionar Registro", use_container_width=True)
         if enviado:
+            dinheiro = converter_moeda(dinheiro_txt)
+            pix_brad = converter_moeda(pix_brad_txt)
+            pix_ston = converter_moeda(pix_ston_txt)
+            cartao = converter_moeda(cartao_txt)
+            gorjetas = converter_moeda(gorjetas_txt)
+            despesas = converter_moeda(despesas_txt)
+
+            extras_dict = {}
+            erro_extra = False
+            for col_n, val_txt in extras_txt_dict.items():
+                val_conv = converter_moeda(val_txt)
+                if val_conv is None:
+                    erro_extra = True
+                else:
+                    extras_dict[col_n] = val_conv
+
             if not local or not local.strip():
                 st.warning("Preencha o campo Local / Descrição antes de adicionar.")
+            elif None in [dinheiro, pix_brad, pix_ston, cartao, gorjetas, despesas] or erro_extra:
+                st.error("Verifique os valores digitados. Use apenas números e vírgula ou ponto (Ex: 25,50).")
             else:
                 with st.spinner("Salvando na planilha..."):
                     df_atual = ler_aba("lancamentos")
@@ -197,24 +232,34 @@ if opcao == "Lançamentos do Dia":
             id_edit = st.selectbox("Escolha o ID", df_c["id"].astype(int).tolist())
             idx_e = df_lanc[df_lanc["id"] == id_edit].index
             ed_loc = st.text_input("Local", value=str(df_lanc.loc[idx_e, "local"].iloc[0]))
-            ed_din = st.number_input("Dinheiro", value=float(df_lanc.loc[idx_e, "dinheiro"].iloc[0]))
-            ed_brad = st.number_input("PIX Bradesco", value=float(df_lanc.loc[idx_e, "pix_bradesco"].iloc[0]))
-            ed_ston = st.number_input("PIX Stones", value=float(df_lanc.loc[idx_e, "pix_stones"].iloc[0]))
-            ed_cart = st.number_input("Cartão", value=float(df_lanc.loc[idx_e, "cartao"].iloc[0]))
-            ed_gorj = st.number_input("Gorjetas", value=float(df_lanc.loc[idx_e, "gorjetas"].iloc[0]))
-            ed_desp = st.number_input("Despesas", value=float(df_lanc.loc[idx_e, "despesas"].iloc[0]))
+            ed_din_txt = st.text_input("Dinheiro", value=f"{float(df_lanc.loc[idx_e, 'dinheiro'].iloc[0]):.2f}".replace(".", ","))
+            ed_brad_txt = st.text_input("PIX Bradesco", value=f"{float(df_lanc.loc[idx_e, 'pix_bradesco'].iloc[0]):.2f}".replace(".", ","))
+            ed_ston_txt = st.text_input("PIX Stones", value=f"{float(df_lanc.loc[idx_e, 'pix_stones'].iloc[0]):.2f}".replace(".", ","))
+            ed_cart_txt = st.text_input("Cartão", value=f"{float(df_lanc.loc[idx_e, 'cartao'].iloc[0]):.2f}".replace(".", ","))
+            ed_gorj_txt = st.text_input("Gorjetas", value=f"{float(df_lanc.loc[idx_e, 'gorjetas'].iloc[0]):.2f}".replace(".", ","))
+            ed_desp_txt = st.text_input("Despesas", value=f"{float(df_lanc.loc[idx_e, 'despesas'].iloc[0]):.2f}".replace(".", ","))
             obs_val = df_lanc.loc[idx_e, "obs"].iloc[0]
             ed_obs = st.text_input("Obs", value=str(obs_val) if pd.notna(obs_val) else "")
 
             if st.button("💾 Salvar Alteração", use_container_width=True):
-                agora = datetime.now().strftime("%d/%m/%Y %H:%M")
-                dono_original = df_lanc.loc[idx_e, "usuario"].iloc[0]
-                df_lanc.loc[idx_e, ["local", "dinheiro", "pix_bradesco", "pix_stones", "cartao", "gorjetas", "despesas", "obs", "usuario", "data_hora"]] = [
-                    ed_loc, ed_din, ed_brad, ed_ston, ed_cart, ed_gorj, ed_desp, ed_obs, dono_original, agora
-                ]
-                salvar_aba("lancamentos", df_lanc)
-                st.success("Alterado!")
-                st.rerun()
+                ed_din = converter_moeda(ed_din_txt)
+                ed_brad = converter_moeda(ed_brad_txt)
+                ed_ston = converter_moeda(ed_ston_txt)
+                ed_cart = converter_moeda(ed_cart_txt)
+                ed_gorj = converter_moeda(ed_gorj_txt)
+                ed_desp = converter_moeda(ed_desp_txt)
+
+                if None in [ed_din, ed_brad, ed_ston, ed_cart, ed_gorj, ed_desp]:
+                    st.error("Verifique os valores digitados na edição. Use apenas números e vírgula ou ponto.")
+                else:
+                    agora = datetime.now().strftime("%d/%m/%Y %H:%M")
+                    dono_original = df_lanc.loc[idx_e, "usuario"].iloc[0]
+                    df_lanc.loc[idx_e, ["local", "dinheiro", "pix_bradesco", "pix_stones", "cartao", "gorjetas", "despesas", "obs", "usuario", "data_hora"]] = [
+                        ed_loc, ed_din, ed_brad, ed_ston, ed_cart, ed_gorj, ed_desp, ed_obs, dono_original, agora
+                    ]
+                    salvar_aba("lancamentos", df_lanc)
+                    st.success("Alterado!")
+                    st.rerun()
 
             if st.button("🗑️ Excluir Registro", use_container_width=True):
                 dono_excluido = df_lanc.loc[idx_e, "usuario"].iloc[0]
@@ -304,29 +349,42 @@ elif opcao == "Relatórios e Gráficos":
         st.success(f"**Saldo Líquido do Período: R$ {(tot_corr + tot_gorj - tot_diar - tot_desp):.2f}**")
 
         if not df_c.empty:
+            # Gráfico 1: Pizza com valor em R$ e percentual
             fig_pie = px.pie(
                 names=["Dinheiro", "PIX Bradesco", "PIX Stones", "Cartão"],
                 values=[df_c["dinheiro"].sum(), df_c["pix_bradesco"].sum(), df_c["pix_stones"].sum(), df_c["cartao"].sum()],
                 title="Entradas por Forma de Pagamento"
             )
+            fig_pie.update_traces(
+                texttemplate="<b>%{label}</b><br>R$ %{value:,.2f}<br>(%{percent})",
+                textposition="inside"
+            )
             st.plotly_chart(fig_pie, use_container_width=True)
 
+            # Gráfico 2: Evolução Diária com valores exibidos acima de cada barra
             df_c["Faturamento"] = df_c["dinheiro"] + df_c["pix_bradesco"] + df_c["pix_stones"] + df_c["cartao"]
             df_agrup = df_c.groupby("data_ref")[["Faturamento", "despesas"]].sum().reset_index()
             df_agrup = df_agrup.rename(columns={"despesas": "Despesas", "data_ref": "Data"})
             fig_bar = px.bar(
                 df_agrup, x="Data", y=["Faturamento", "Despesas"], barmode="group",
-                title="Evolução Diária: Faturamento x Despesas", labels={"value": "Valor (R$)", "variable": "Categoria"}
+                title="Evolução Diária: Faturamento x Despesas", labels={"value": "Valor (R$)", "variable": "Categoria"},
+                text_auto=True
             )
+            fig_bar.update_traces(texttemplate="R$ %{y:,.2f}", textposition="outside")
+            fig_bar.update_layout(uniformtext_minsize=8, uniformtext_mode="show")
             st.plotly_chart(fig_bar, use_container_width=True)
 
+            # Gráfico 3: Comparativo por Motorista com valores exibidos acima de cada barra
             if eh_admin and filtro_rel_user == "Todos os Usuários":
                 df_comp = df_c.groupby("usuario")[["Faturamento", "despesas"]].sum().reset_index()
                 df_comp = df_comp.rename(columns={"usuario": "Motorista", "despesas": "Despesas"})
                 fig_comp = px.bar(
                     df_comp, x="Motorista", y=["Faturamento", "Despesas"], barmode="group",
-                    title="Comparativo por Usuário: Faturamento x Despesas", labels={"value": "Valor (R$)", "variable": "Categoria"}
+                    title="Comparativo por Usuário: Faturamento x Despesas", labels={"value": "Valor (R$)", "variable": "Categoria"},
+                    text_auto=True
                 )
+                fig_comp.update_traces(texttemplate="R$ %{y:,.2f}", textposition="outside")
+                fig_comp.update_layout(uniformtext_minsize=8, uniformtext_mode="show")
                 st.plotly_chart(fig_comp, use_container_width=True)
 
         csv = df_p.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig")
