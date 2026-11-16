@@ -86,9 +86,12 @@ if opcao == "Lançamentos do Dia":
 
     st.divider()
 
-    st.subheader("2. Nova Corrida ou Despesa")
+    df_c_dia = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CORRIDA")]
+    proxima_corrida = len(df_c_dia) + 1
+
+    st.subheader(f"2. Nova Corrida ou Despesa (Corrida Nº {proxima_corrida} do dia)")
     with st.form("novo_reg", clear_on_submit=True):
-        qtd = st.number_input("Qtd Corridas", min_value=0, value=1, step=1)
+        st.info(f"🔢 **Corrida automática do dia:** Nº {proxima_corrida}")
         local = st.text_input("Local / Descrição (Ex: Piriquito, Gasolina)")
         dinheiro = st.number_input("Dinheiro (R$)", min_value=0.0, step=1.0)
         pix_brad = st.number_input("PIX Bradesco (R$)", min_value=0.0, step=1.0)
@@ -109,17 +112,19 @@ if opcao == "Lançamentos do Dia":
             else:
                 with st.spinner("Salvando na planilha..."):
                     df_atual = ler_aba("lancamentos")
+                    df_atual_dia = df_atual[(df_atual["data_ref"] == data_str) & (df_atual["tipo"] == "CORRIDA")]
+                    num_corrida_atual = len(df_atual_dia) + 1
                     agora = datetime.now().strftime("%d/%m/%Y %H:%M")
                     novo_id = 1 if df_atual.empty else int(df_atual["id"].max()) + 1
                     nova_linha = pd.DataFrame([{
-                        "id": novo_id, "data_ref": data_str, "tipo": "CORRIDA", "qtd": qtd, "local": local.strip(),
+                        "id": novo_id, "data_ref": data_str, "tipo": "CORRIDA", "qtd": num_corrida_atual, "local": local.strip(),
                         "dinheiro": dinheiro, "pix_bradesco": pix_brad, "pix_stones": pix_ston, "cartao": cartao,
                         "gorjetas": gorjetas, "despesas": despesas, "obs": obs.strip(), "extras": json.dumps(extras_dict),
                         "usuario": st.session_state.nome, "data_hora": agora
                     }])
                     df_atual = pd.concat([df_atual, nova_linha], ignore_index=True)
                     salvar_aba("lancamentos", df_atual)
-                st.success("Registrado com sucesso!")
+                st.success(f"Corrida Nº {num_corrida_atual} registrada com sucesso!")
                 st.rerun()
 
     st.divider()
@@ -127,19 +132,22 @@ if opcao == "Lançamentos do Dia":
     st.subheader("3. Registros do Dia")
     df_c = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CORRIDA")].copy()
     if not df_c.empty:
+        df_c = df_c.sort_values("id").reset_index(drop=True)
+        df_c["qtd"] = range(1, len(df_c) + 1)
+
         for col_n in lista_extras:
             df_c[col_n] = df_c["extras"].apply(lambda x: json.loads(str(x)).get(col_n, 0.0) if pd.notna(x) and str(x).startswith("{") else 0.0)
         
         cols_soma = ["dinheiro", "pix_bradesco", "pix_stones", "cartao", "gorjetas"] + lista_extras
         df_c["Total Linha"] = df_c[cols_soma].sum(axis=1) - df_c["despesas"]
         
-        cols_show = ["id", "qtd", "local", "dinheiro", "pix_bradesco", "pix_stones", "cartao", "gorjetas", "despesas"] + lista_extras + ["Total Linha", "obs", "usuario", "data_hora"]
-        st.dataframe(df_c[cols_show], use_container_width=True, hide_index=True)
+        df_exibir = df_c.rename(columns={"qtd": "Corrida Nº"})
+        cols_show = ["id", "Corrida Nº", "local", "dinheiro", "pix_bradesco", "pix_stones", "cartao", "gorjetas", "despesas"] + lista_extras + ["Total Linha", "obs", "usuario", "data_hora"]
+        st.dataframe(df_exibir[cols_show], use_container_width=True, hide_index=True)
 
         with st.expander("✏️ Alterar ou Excluir Registro"):
             id_edit = st.selectbox("Escolha o ID", df_c["id"].astype(int).tolist())
             idx_e = df_lanc[df_lanc["id"] == id_edit].index
-            ed_qtd = st.number_input("Qtd", value=int(df_lanc.loc[idx_e, "qtd"].iloc[0]))
             ed_loc = st.text_input("Local", value=str(df_lanc.loc[idx_e, "local"].iloc[0]))
             ed_din = st.number_input("Dinheiro", value=float(df_lanc.loc[idx_e, "dinheiro"].iloc[0]))
             ed_brad = st.number_input("PIX Bradesco", value=float(df_lanc.loc[idx_e, "pix_bradesco"].iloc[0]))
@@ -152,8 +160,8 @@ if opcao == "Lançamentos do Dia":
 
             if st.button("💾 Salvar Alteração", use_container_width=True):
                 agora = datetime.now().strftime("%d/%m/%Y %H:%M")
-                df_lanc.loc[idx_e, ["qtd", "local", "dinheiro", "pix_bradesco", "pix_stones", "cartao", "gorjetas", "despesas", "obs", "usuario", "data_hora"]] = [
-                    ed_qtd, ed_loc, ed_din, ed_brad, ed_ston, ed_cart, ed_gorj, ed_desp, ed_obs, st.session_state.nome, agora
+                df_lanc.loc[idx_e, ["local", "dinheiro", "pix_bradesco", "pix_stones", "cartao", "gorjetas", "despesas", "obs", "usuario", "data_hora"]] = [
+                    ed_loc, ed_din, ed_brad, ed_ston, ed_cart, ed_gorj, ed_desp, ed_obs, st.session_state.nome, agora
                 ]
                 salvar_aba("lancamentos", df_lanc)
                 st.success("Alterado!")
@@ -161,18 +169,22 @@ if opcao == "Lançamentos do Dia":
 
             if st.button("🗑️ Excluir Registro", use_container_width=True):
                 df_lanc = df_lanc.drop(idx_e)
+                mask_dia_corr = (df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CORRIDA")
+                df_lanc.loc[mask_dia_corr, "qtd"] = range(1, mask_dia_corr.sum() + 1)
                 salvar_aba("lancamentos", df_lanc)
-                st.warning("Excluído!")
+                st.warning("Excluído e numeração do dia reorganizada!")
                 st.rerun()
 
     st.divider()
     st.subheader("📊 Resumo do Dia")
+    total_corridas_feitas = len(df_c)
     t_din = df_c["dinheiro"].sum() if not df_c.empty else 0.0
     t_pix_c = (df_c["pix_bradesco"].sum() + df_c["pix_stones"].sum() + df_c["cartao"].sum()) if not df_c.empty else 0.0
     t_corr = t_din + t_pix_c
     t_desp = df_c["despesas"].sum() if not df_c.empty else 0.0
     t_gorj = df_c["gorjetas"].sum() if not df_c.empty else 0.0
 
+    st.metric("Total de Corridas Feitas no Dia", f"{total_corridas_feitas}")
     st.metric("1. Total de Dinheiro (no dia)", f"R$ {t_din:.2f}")
     st.metric("2. Total PIX + Cartão", f"R$ {t_pix_c:.2f}")
     st.metric("3. Total Corridas (Dinheiro + PIX + Cartão)", f"R$ {t_corr:.2f}")
@@ -194,6 +206,7 @@ elif opcao == "Relatórios e Gráficos":
         df_c = df_p[df_p["tipo"] == "CORRIDA"].copy()
         df_d = df_p[df_p["tipo"] == "DIARIA"]
 
+        tot_qtd_corridas = len(df_c)
         tot_din = df_c["dinheiro"].sum()
         tot_pix_c = df_c["pix_bradesco"].sum() + df_c["pix_stones"].sum() + df_c["cartao"].sum()
         tot_corr = tot_din + tot_pix_c
@@ -201,6 +214,7 @@ elif opcao == "Relatórios e Gráficos":
         tot_desp = df_c["despesas"].sum()
         tot_gorj = df_c["gorjetas"].sum()
 
+        st.metric("Total de Corridas no Período", f"{tot_qtd_corridas}")
         st.metric("Faturamento Corridas", f"R$ {tot_corr:.2f}")
         st.metric("Total Dinheiro", f"R$ {tot_din:.2f}")
         st.metric("Total PIX + Cartão", f"R$ {tot_pix_c:.2f}")
