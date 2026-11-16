@@ -26,9 +26,9 @@ if not st.session_state.logado:
     pwd = st.text_input("Senha", type="password")
     if st.button("Entrar", use_container_width=True):
         df_u = ler_aba("usuarios")
-        df_u["username"] = df_u["username"].astype(str)
-        df_u["senha"] = df_u["senha"].astype(str)
-        match = df_u[(df_u["username"] == user) & (df_u["senha"] == pwd)]
+        df_u["username"] = df_u["username"].astype(str).str.strip()
+        df_u["senha"] = df_u["senha"].astype(str).str.replace(r"\.0$", "", regex=True).str.strip()
+        match = df_u[(df_u["username"] == user.strip()) & (df_u["senha"] == pwd.strip())]
         if not match.empty:
             st.session_state.logado = True
             st.session_state.nome = match.iloc[0]["nome"]
@@ -69,13 +69,13 @@ if opcao == "Lançamentos do Dia":
         salvar_aba("lancamentos", df_lanc)
         st.rerun()
 
-    idx_caixa = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CAIXA")].index[0]
-    idx_diaria = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "DIARIA")].index[0]
+    idx_caixa = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CAIXA")].index
+    idx_diaria = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "DIARIA")].index
 
     st.subheader("1. Caixa e Diária")
     c_f1, c_f2 = st.columns(2)
-    val_caixa = c_f1.number_input("💰 Dinheiro em Caixa (R$)", value=float(df_lanc.loc[idx_caixa, "dinheiro"]), step=1.0)
-    val_diaria = c_f2.number_input("📅 Diária do Dia (R$)", value=abs(float(df_lanc.loc[idx_diaria, "dinheiro"])), step=5.0)
+    val_caixa = c_f1.number_input("💰 Dinheiro em Caixa (R$)", value=float(df_lanc.loc[idx_caixa, "dinheiro"].iloc[0]), step=1.0)
+    val_diaria = c_f2.number_input("📅 Diária do Dia (R$)", value=abs(float(df_lanc.loc[idx_diaria, "dinheiro"].iloc[0])), step=5.0)
     if st.button("Salvar Caixa e Diária", use_container_width=True):
         agora = datetime.now().strftime("%d/%m/%Y %H:%M")
         df_lanc.loc[idx_caixa, ["dinheiro", "usuario", "data_hora"]] = [val_caixa, st.session_state.nome, agora]
@@ -102,19 +102,25 @@ if opcao == "Lançamentos do Dia":
         for col_n in lista_extras:
             extras_dict[col_n] = st.number_input(f"{col_n} (R$)", min_value=0.0, step=1.0)
 
-        if st.form_submit_button("➕ Adicionar Registro", use_container_width=True):
-            agora = datetime.now().strftime("%d/%m/%Y %H:%M")
-            novo_id = int(df_lanc["id"].max()) + 1
-            nova_linha = pd.DataFrame([{
-                "id": novo_id, "data_ref": data_str, "tipo": "CORRIDA", "qtd": qtd, "local": local,
-                "dinheiro": dinheiro, "pix_bradesco": pix_brad, "pix_stones": pix_ston, "cartao": cartao,
-                "gorjetas": gorjetas, "despesas": despesas, "obs": obs, "extras": json.dumps(extras_dict),
-                "usuario": st.session_state.nome, "data_hora": agora
-            }])
-            df_lanc = pd.concat([df_lanc, nova_linha], ignore_index=True)
-            salvar_aba("lancamentos", df_lanc)
-            st.success("Registrado!")
-            st.rerun()
+        enviado = st.form_submit_button("➕ Adicionar Registro", use_container_width=True)
+        if enviado:
+            if not local or not local.strip():
+                st.warning("Preencha o campo Local / Descrição antes de adicionar.")
+            else:
+                with st.spinner("Salvando na planilha..."):
+                    df_atual = ler_aba("lancamentos")
+                    agora = datetime.now().strftime("%d/%m/%Y %H:%M")
+                    novo_id = 1 if df_atual.empty else int(df_atual["id"].max()) + 1
+                    nova_linha = pd.DataFrame([{
+                        "id": novo_id, "data_ref": data_str, "tipo": "CORRIDA", "qtd": qtd, "local": local.strip(),
+                        "dinheiro": dinheiro, "pix_bradesco": pix_brad, "pix_stones": pix_ston, "cartao": cartao,
+                        "gorjetas": gorjetas, "despesas": despesas, "obs": obs.strip(), "extras": json.dumps(extras_dict),
+                        "usuario": st.session_state.nome, "data_hora": agora
+                    }])
+                    df_atual = pd.concat([df_atual, nova_linha], ignore_index=True)
+                    salvar_aba("lancamentos", df_atual)
+                st.success("Registrado com sucesso!")
+                st.rerun()
 
     st.divider()
 
@@ -132,16 +138,17 @@ if opcao == "Lançamentos do Dia":
 
         with st.expander("✏️ Alterar ou Excluir Registro"):
             id_edit = st.selectbox("Escolha o ID", df_c["id"].astype(int).tolist())
-            idx_e = df_lanc[df_lanc["id"] == id_edit].index[0]
-            ed_qtd = st.number_input("Qtd", value=int(df_lanc.loc[idx_e, "qtd"]))
-            ed_loc = st.text_input("Local", value=str(df_lanc.loc[idx_e, "local"]))
-            ed_din = st.number_input("Dinheiro", value=float(df_lanc.loc[idx_e, "dinheiro"]))
-            ed_brad = st.number_input("PIX Bradesco", value=float(df_lanc.loc[idx_e, "pix_bradesco"]))
-            ed_ston = st.number_input("PIX Stones", value=float(df_lanc.loc[idx_e, "pix_stones"]))
-            ed_cart = st.number_input("Cartão", value=float(df_lanc.loc[idx_e, "cartao"]))
-            ed_gorj = st.number_input("Gorjetas", value=float(df_lanc.loc[idx_e, "gorjetas"]))
-            ed_desp = st.number_input("Despesas", value=float(df_lanc.loc[idx_e, "despesas"]))
-            ed_obs = st.text_input("Obs", value=str(df_lanc.loc[idx_e, "obs"]) if pd.notna(df_lanc.loc[idx_e, "obs"]) else "")
+            idx_e = df_lanc[df_lanc["id"] == id_edit].index
+            ed_qtd = st.number_input("Qtd", value=int(df_lanc.loc[idx_e, "qtd"].iloc[0]))
+            ed_loc = st.text_input("Local", value=str(df_lanc.loc[idx_e, "local"].iloc[0]))
+            ed_din = st.number_input("Dinheiro", value=float(df_lanc.loc[idx_e, "dinheiro"].iloc[0]))
+            ed_brad = st.number_input("PIX Bradesco", value=float(df_lanc.loc[idx_e, "pix_bradesco"].iloc[0]))
+            ed_ston = st.number_input("PIX Stones", value=float(df_lanc.loc[idx_e, "pix_stones"].iloc[0]))
+            ed_cart = st.number_input("Cartão", value=float(df_lanc.loc[idx_e, "cartao"].iloc[0]))
+            ed_gorj = st.number_input("Gorjetas", value=float(df_lanc.loc[idx_e, "gorjetas"].iloc[0]))
+            ed_desp = st.number_input("Despesas", value=float(df_lanc.loc[idx_e, "despesas"].iloc[0]))
+            obs_val = df_lanc.loc[idx_e, "obs"].iloc[0]
+            ed_obs = st.text_input("Obs", value=str(obs_val) if pd.notna(obs_val) else "")
 
             if st.button("💾 Salvar Alteração", use_container_width=True):
                 agora = datetime.now().strftime("%d/%m/%Y %H:%M")
@@ -202,36 +209,24 @@ elif opcao == "Relatórios e Gráficos":
         st.success(f"**Saldo Líquido do Período: R$ {(tot_corr + tot_gorj - tot_diar - tot_desp):.2f}**")
 
         if not df_c.empty:
-            fig_pizza = px.pie(
+            fig_pie = px.pie(
                 names=["Dinheiro", "PIX Bradesco", "PIX Stones", "Cartão"],
                 values=[df_c["dinheiro"].sum(), df_c["pix_bradesco"].sum(), df_c["pix_stones"].sum(), df_c["cartao"].sum()],
                 title="Entradas por Forma de Pagamento"
             )
-            st.plotly_chart(fig_pizza, use_container_width=True)
+            st.plotly_chart(fig_pie, use_container_width=True)
 
             df_c["Faturamento"] = df_c["dinheiro"] + df_c["pix_bradesco"] + df_c["pix_stones"] + df_c["cartao"]
-            df_c["Despesas"] = df_c["despesas"]
-            df_agrupado = df_c.groupby("data_ref")[["Faturamento", "Despesas"]].sum().reset_index()
-            fig_barras = px.bar(
-                df_agrupado,
-                x="data_ref",
-                y=["Faturamento", "Despesas"],
-                barmode="group",
-                title="Evolução Diária: Faturamento x Despesas",
-                labels={"value": "Valor (R$)", "data_ref": "Data", "variable": "Tipo"}
+            df_agrup = df_c.groupby("data_ref")[["Faturamento", "despesas"]].sum().reset_index()
+            df_agrup = df_agrup.rename(columns={"despesas": "Despesas", "data_ref": "Data"})
+            fig_bar = px.bar(
+                df_agrup, x="Data", y=["Faturamento", "Despesas"], barmode="group",
+                title="Evolução Diária: Faturamento x Despesas", labels={"value": "Valor (R$)", "variable": "Categoria"}
             )
-            st.plotly_chart(fig_barras, use_container_width=True)
+            st.plotly_chart(fig_bar, use_container_width=True)
 
         csv = df_p.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig")
-        st.download_button(
-            label="📥 Baixar Relatório do Período (Excel/CSV)",
-            data=csv,
-            file_name=f"relatorio_fretes_{dt_ini}_{dt_fim}.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
-    else:
-        st.warning("Nenhum dado encontrado no período selecionado.")
+        st.download_button("📥 Baixar Relatório Completo (CSV/Excel)", data=csv, file_name=f"relatorio_{dt_ini}_{dt_fim}.csv", mime="text/csv", use_container_width=True)
 
 elif opcao == "Administração":
     st.header("⚙️ Administração")
@@ -242,16 +237,18 @@ elif opcao == "Administração":
         u_sen = st.text_input("Senha")
         u_per = st.selectbox("Perfil", ["operador", "admin"])
         if st.form_submit_button("Criar Usuário"):
-            df_u = ler_aba("usuarios")
-            novo_u = pd.DataFrame([{"username": u_log, "senha": u_sen, "nome": u_nom, "perfil": u_per}])
-            salvar_aba("usuarios", pd.concat([df_u, novo_u], ignore_index=True))
-            st.success("Usuário criado!")
+            if u_log and u_sen:
+                df_u = ler_aba("usuarios")
+                novo_u = pd.DataFrame([{"username": u_log.strip(), "senha": str(u_sen).strip(), "nome": u_nom.strip(), "perfil": u_per}])
+                salvar_aba("usuarios", pd.concat([df_u, novo_u], ignore_index=True))
+                st.success("Usuário criado!")
 
     st.subheader("Adicionar Nova Coluna")
     with st.form("f_col", clear_on_submit=True):
         n_col = st.text_input("Nome da Coluna (Ex: Pedágio, Vale)")
         if st.form_submit_button("Adicionar Coluna"):
-            df_cols = ler_aba("colunas_extras")
-            nova_c = pd.DataFrame([{"nome_coluna": n_col}])
-            salvar_aba("colunas_extras", pd.concat([df_cols, nova_c], ignore_index=True))
-            st.success("Coluna criada!")
+            if n_col:
+                df_cols = ler_aba("colunas_extras")
+                nova_c = pd.DataFrame([{"nome_coluna": n_col.strip()}])
+                salvar_aba("colunas_extras", pd.concat([df_cols, nova_c], ignore_index=True))
+                st.success("Coluna criada!")
