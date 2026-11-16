@@ -138,45 +138,50 @@ if opcao == "Lançamentos do Dia":
     df_c_dia_user = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CORRIDA") & (df_lanc["usuario"] == usuario_atual)] if not df_lanc.empty else pd.DataFrame()
     proxima_corrida = len(df_c_dia_user) + 1
 
+    # Lista simplificada de tipos de lançamento (formas de pagamento + despesa + colunas extras)
+    opcoes_tipo_lanc = [
+        "Dinheiro",
+        "PIX Bradesco",
+        "PIX Stones",
+        "Cartão",
+        "Despesas (Gasolina/Manut.)"
+    ] + lista_extras
+
     st.subheader(f"2. Nova Corrida ou Despesa (Corrida Nº {proxima_corrida} de {usuario_atual})")
     with st.form("novo_reg", clear_on_submit=True):
         st.info(f"🔢 **Corrida automática do dia:** Nº {proxima_corrida}")
         local = st.text_input("Local / Descrição (Ex: Piriquito, Gasolina)")
-        dinheiro_txt = st.text_input("Dinheiro (R$)", placeholder="0,00")
-        pix_brad_txt = st.text_input("PIX Bradesco (R$)", placeholder="0,00")
-        pix_ston_txt = st.text_input("PIX Stones (R$)", placeholder="0,00")
-        cartao_txt = st.text_input("Cartão (R$)", placeholder="0,00")
-        gorjetas_txt = st.text_input("Gorjetas (R$)", placeholder="0,00")
-        despesas_txt = st.text_input("Despesas - Gasolina/Manut. (R$)", placeholder="0,00")
+        
+        c_v1, c_v2, c_v3 = st.columns([2, 1.5, 1.5])
+        tipo_pagamento = c_v1.selectbox("Forma de Pagamento / Tipo", opcoes_tipo_lanc)
+        valor_txt = c_v2.text_input("Valor (R$)", placeholder="0,00")
+        gorjetas_txt = c_v3.text_input("Gorjeta (R$)", placeholder="0,00")
+        
         obs = st.text_input("Observação")
-
-        extras_txt_dict = {}
-        for col_n in lista_extras:
-            extras_txt_dict[col_n] = st.text_input(f"{col_n} (R$)", placeholder="0,00")
 
         enviado = st.form_submit_button("➕ Adicionar Registro", use_container_width=True)
         if enviado:
-            dinheiro = converter_moeda(dinheiro_txt)
-            pix_brad = converter_moeda(pix_brad_txt)
-            pix_ston = converter_moeda(pix_ston_txt)
-            cartao = converter_moeda(cartao_txt)
+            valor = converter_moeda(valor_txt)
             gorjetas = converter_moeda(gorjetas_txt)
-            despesas = converter_moeda(despesas_txt)
-
-            extras_dict = {}
-            erro_extra = False
-            for col_n, val_txt in extras_txt_dict.items():
-                val_conv = converter_moeda(val_txt)
-                if val_conv is None:
-                    erro_extra = True
-                else:
-                    extras_dict[col_n] = val_conv
 
             if not local or not local.strip():
                 st.warning("Preencha o campo Local / Descrição antes de adicionar.")
-            elif None in [dinheiro, pix_brad, pix_ston, cartao, gorjetas, despesas] or erro_extra:
+            elif valor is None or gorjetas is None:
                 st.error("Verifique os valores digitados. Use apenas números e vírgula ou ponto (Ex: 25,50).")
+            elif valor == 0.0 and gorjetas == 0.0:
+                st.warning("Informe um Valor ou uma Gorjeta antes de adicionar.")
             else:
+                # Distribui o valor na coluna correspondente da planilha
+                dinheiro = valor if tipo_pagamento == "Dinheiro" else 0.0
+                pix_brad = valor if tipo_pagamento == "PIX Bradesco" else 0.0
+                pix_ston = valor if tipo_pagamento == "PIX Stones" else 0.0
+                cartao = valor if tipo_pagamento == "Cartão" else 0.0
+                despesas = valor if tipo_pagamento == "Despesas (Gasolina/Manut.)" else 0.0
+
+                extras_dict = {}
+                for col_n in lista_extras:
+                    extras_dict[col_n] = valor if tipo_pagamento == col_n else 0.0
+
                 with st.spinner("Salvando na planilha..."):
                     df_atual = ler_aba("lancamentos")
                     if not df_atual.empty:
@@ -196,7 +201,7 @@ if opcao == "Lançamentos do Dia":
                     }])
                     df_atual = pd.concat([df_atual, nova_linha], ignore_index=True)
                     salvar_aba("lancamentos", df_atual)
-                st.success(f"Corrida Nº {num_corrida_atual} registrada com sucesso!")
+                st.success(f"Corrida Nº {num_corrida_atual} ({tipo_pagamento}) registrada com sucesso!")
                 st.rerun()
 
     st.divider()
@@ -349,7 +354,6 @@ elif opcao == "Relatórios e Gráficos":
         st.success(f"**Saldo Líquido do Período: R$ {(tot_corr + tot_gorj - tot_diar - tot_desp):.2f}**")
 
         if not df_c.empty:
-            # Gráfico 1: Pizza com valor em R$ e percentual
             fig_pie = px.pie(
                 names=["Dinheiro", "PIX Bradesco", "PIX Stones", "Cartão"],
                 values=[df_c["dinheiro"].sum(), df_c["pix_bradesco"].sum(), df_c["pix_stones"].sum(), df_c["cartao"].sum()],
@@ -361,7 +365,6 @@ elif opcao == "Relatórios e Gráficos":
             )
             st.plotly_chart(fig_pie, use_container_width=True)
 
-            # Gráfico 2: Evolução Diária com valores exibidos acima de cada barra
             df_c["Faturamento"] = df_c["dinheiro"] + df_c["pix_bradesco"] + df_c["pix_stones"] + df_c["cartao"]
             df_agrup = df_c.groupby("data_ref")[["Faturamento", "despesas"]].sum().reset_index()
             df_agrup = df_agrup.rename(columns={"despesas": "Despesas", "data_ref": "Data"})
@@ -374,7 +377,6 @@ elif opcao == "Relatórios e Gráficos":
             fig_bar.update_layout(uniformtext_minsize=8, uniformtext_mode="show")
             st.plotly_chart(fig_bar, use_container_width=True)
 
-            # Gráfico 3: Comparativo por Motorista com valores exibidos acima de cada barra
             if eh_admin and filtro_rel_user == "Todos os Usuários":
                 df_comp = df_c.groupby("usuario")[["Faturamento", "despesas"]].sum().reset_index()
                 df_comp = df_comp.rename(columns={"usuario": "Motorista", "despesas": "Despesas"})
