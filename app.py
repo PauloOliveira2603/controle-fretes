@@ -20,12 +20,25 @@ def hoje_br():
     return datetime.now(FUSO_BR).date()
 
 COLS_NUMERICAS = ["dinheiro", "pix_bradesco", "pix_stones", "cartao", "gorjetas", "despesas"]
-COLS_TEXTO = ["data_ref", "tipo", "local", "obs", "extras", "usuario", "data_hora"]
+COLS_TEXTO = ["data_ref", "tipo", "local", "obs", "extras", "usuario", "data_hora", "usuario_alteracao", "data_alteracao"]
+ORDEM_COLUNAS_LANC = [
+    "id", "data_ref", "tipo", "qtd", "local",
+    "dinheiro", "pix_bradesco", "pix_stones", "cartao",
+    "gorjetas", "despesas", "obs", "extras",
+    "usuario", "data_hora", "usuario_alteracao", "data_alteracao"
+]
 
 def normalizar_df_lancamentos(df):
     if df is None or df.empty:
-        return pd.DataFrame(columns=["id", "data_ref", "tipo", "qtd", "local", "dinheiro", "pix_bradesco", "pix_stones", "cartao", "gorjetas", "despesas", "obs", "extras", "usuario", "data_hora"])
+        return pd.DataFrame(columns=ORDEM_COLUNAS_LANC)
     df = df.copy()
+
+    # Garante que as colunas de auditoria de alteração existam mesmo em planilhas antigas
+    if "usuario_alteracao" not in df.columns:
+        df["usuario_alteracao"] = df["usuario"] if "usuario" in df.columns else ""
+    if "data_alteracao" not in df.columns:
+        df["data_alteracao"] = df["data_hora"] if "data_hora" in df.columns else ""
+
     for col in COLS_NUMERICAS:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0).astype(float)
@@ -33,13 +46,25 @@ def normalizar_df_lancamentos(df):
         if col in df.columns:
             df[col] = df[col].fillna("").astype(str)
             df[col] = df[col].replace({"nan": "", "None": "", "<NA>": ""})
+
+    # Preenche retroativamente registros antigos onde usuario_alteracao/data_alteracao estejam vazios
+    mask_u_alt_vazio = df["usuario_alteracao"].str.strip() == ""
+    df.loc[mask_u_alt_vazio, "usuario_alteracao"] = df.loc[mask_u_alt_vazio, "usuario"]
+
+    mask_d_alt_vazio = df["data_alteracao"].str.strip() == ""
+    df.loc[mask_d_alt_vazio, "data_alteracao"] = df.loc[mask_d_alt_vazio, "data_hora"]
+
     if "usuario" in df.columns:
         df["usuario"] = df["usuario"].str.strip()
+    if "usuario_alteracao" in df.columns:
+        df["usuario_alteracao"] = df["usuario_alteracao"].str.strip()
     if "id" in df.columns:
         df["id"] = pd.to_numeric(df["id"], errors="coerce").fillna(0).astype(int)
     if "qtd" in df.columns:
         df["qtd"] = pd.to_numeric(df["qtd"], errors="coerce").fillna(0).astype(int)
-    return df
+
+    cols_finais = [c for c in ORDEM_COLUNAS_LANC if c in df.columns] + [c for c in df.columns if c not in ORDEM_COLUNAS_LANC]
+    return df[cols_finais]
 
 def ler_aba(aba):
     df = conn.read(worksheet=aba, ttl=0)
@@ -86,7 +111,6 @@ def gerar_pdf_relatorio(dt_ini, dt_fim, filtro_user, metricas, df_corridas):
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
-    # Cabeçalho
     pdf.set_fill_color(30, 58, 138)
     pdf.rect(0, 0, 210, 28, "F")
     pdf.set_text_color(255, 255, 255)
@@ -104,7 +128,6 @@ def gerar_pdf_relatorio(dt_ini, dt_fim, filtro_user, metricas, df_corridas):
     pdf.cell(0, 8, limpar_latin1("1. Resumo Financeiro do Período"), ln=True)
     pdf.ln(1)
 
-    # Tabela de Resumo em 2 colunas
     pdf.set_font("Helvetica", "", 10)
     linhas_resumo = [
         ("Total de Corridas Realizadas", f"{metricas['qtd_corridas']}"),
@@ -140,7 +163,6 @@ def gerar_pdf_relatorio(dt_ini, dt_fim, filtro_user, metricas, df_corridas):
         pdf.set_font("Helvetica", "I", 10)
         pdf.cell(0, 8, limpar_latin1("Nenhum lançamento registrado no período selecionado."), ln=True)
     else:
-        # Cabeçalho da tabela detalhada
         pdf.set_fill_color(30, 58, 138)
         pdf.set_text_color(255, 255, 255)
         pdf.set_font("Helvetica", "B", 8)
@@ -269,29 +291,41 @@ if opcao == "Lançamentos do Dia":
                 idx_c = df_atual[(df_atual["data_ref"] == data_str) & (df_atual["tipo"] == "CAIXA") & (df_atual["usuario"] == usuario_atual)].index if not df_atual.empty else []
                 idx_d = df_atual[(df_atual["data_ref"] == data_str) & (df_atual["tipo"] == "DIARIA") & (df_atual["usuario"] == usuario_atual)].index if not df_atual.empty else []
 
+                # Na alteração, preserva usuario e data_hora originais e atualiza apenas usuario_alteracao e data_alteracao
                 if len(idx_c) > 0:
                     df_atual.loc[idx_c, "dinheiro"] = float(val_caixa)
-                    df_atual.loc[idx_c, "usuario"] = str(usuario_atual)
-                    df_atual.loc[idx_c, "data_hora"] = str(agora)
+                    df_atual.loc[idx_c, "usuario_alteracao"] = str(usuario_atual)
+                    df_atual.loc[idx_c, "data_alteracao"] = str(agora)
                 else:
                     novo_id = 1 if df_atual.empty else int(df_atual["id"].max()) + 1
-                    nova_c = pd.DataFrame([{"id": novo_id, "data_ref": data_str, "tipo": "CAIXA", "qtd": 0, "local": "Caixa", "dinheiro": float(val_caixa), "pix_bradesco": 0.0, "pix_stones": 0.0, "cartao": 0.0, "gorjetas": 0.0, "despesas": 0.0, "obs": "", "extras": "{}", "usuario": usuario_atual, "data_hora": agora}])
+                    nova_c = pd.DataFrame([{
+                        "id": novo_id, "data_ref": data_str, "tipo": "CAIXA", "qtd": 0, "local": "Caixa",
+                        "dinheiro": float(val_caixa), "pix_bradesco": 0.0, "pix_stones": 0.0, "cartao": 0.0,
+                        "gorjetas": 0.0, "despesas": 0.0, "obs": "", "extras": "{}",
+                        "usuario": str(usuario_atual), "data_hora": str(agora),
+                        "usuario_alteracao": str(usuario_atual), "data_alteracao": str(agora)
+                    }])
                     df_atual = pd.concat([df_atual, nova_c], ignore_index=True)
 
                 if len(idx_d) > 0:
                     df_atual.loc[idx_d, "dinheiro"] = float(-abs(val_diaria))
-                    df_atual.loc[idx_d, "usuario"] = str(usuario_atual)
-                    df_atual.loc[idx_d, "data_hora"] = str(agora)
+                    df_atual.loc[idx_d, "usuario_alteracao"] = str(usuario_atual)
+                    df_atual.loc[idx_d, "data_alteracao"] = str(agora)
                 else:
                     novo_id = 1 if df_atual.empty else int(df_atual["id"].max()) + 1
-                    nova_d = pd.DataFrame([{"id": novo_id, "data_ref": data_str, "tipo": "DIARIA", "qtd": 0, "local": "Diária", "dinheiro": float(-abs(val_diaria)), "pix_bradesco": 0.0, "pix_stones": 0.0, "cartao": 0.0, "gorjetas": 0.0, "despesas": 0.0, "obs": "", "extras": "{}", "usuario": usuario_atual, "data_hora": agora}])
+                    nova_d = pd.DataFrame([{
+                        "id": novo_id, "data_ref": data_str, "tipo": "DIARIA", "qtd": 0, "local": "Diária",
+                        "dinheiro": float(-abs(val_diaria)), "pix_bradesco": 0.0, "pix_stones": 0.0, "cartao": 0.0,
+                        "gorjetas": 0.0, "despesas": 0.0, "obs": "", "extras": "{}",
+                        "usuario": str(usuario_atual), "data_hora": str(agora),
+                        "usuario_alteracao": str(usuario_atual), "data_alteracao": str(agora)
+                    }])
                     df_atual = pd.concat([df_atual, nova_d], ignore_index=True)
 
                 salvar_aba("lancamentos", df_atual)
             st.success("Caixa e Diária salvos com sucesso!")
             st.rerun()
 
-    # Botão para excluir os registros de Caixa e Diária do usuário na data selecionada
     tem_caixa_ou_diaria = (not caixa_existente.empty) or (not diaria_existente.empty)
     if c_btn2.button("🗑️ Excluir Caixa/Diária", use_container_width=True, disabled=not tem_caixa_ou_diaria):
         with st.spinner("Excluindo Caixa e Diária..."):
@@ -327,7 +361,6 @@ if opcao == "Lançamentos do Dia":
     valor_txt = c_v2.text_input("Valor (R$)", placeholder="0,00", key=f"in_valor_{seq}")
     gorjetas_txt = c_v3.text_input("Gorjeta (R$)", placeholder="0,00", key=f"in_gorjeta_{seq}")
 
-    # Se o usuário selecionar Despesa, pergunta de onde saiu o pagamento para não distorcer o caixa
     origem_despesa = "Cartão / Conta (Não sai do caixa)"
     if tipo_pagamento == "Despesas (Gasolina/Manut.)":
         origem_despesa = st.radio(
@@ -404,6 +437,8 @@ if opcao == "Lançamentos do Dia":
                 num_corrida_atual = len(df_atual_dia) + 1
                 agora = agora_br_str()
                 novo_id = 1 if df_atual.empty else int(df_atual["id"].max()) + 1
+                
+                # Na inclusão, usuario_alteracao e data_alteracao recebem exatamente os mesmos valores de usuario e data_hora
                 nova_linha = pd.DataFrame([{
                     "id": int(novo_id),
                     "data_ref": str(data_str),
@@ -419,7 +454,9 @@ if opcao == "Lançamentos do Dia":
                     "obs": obs_limpa,
                     "extras": json.dumps(extras_dict, ensure_ascii=False),
                     "usuario": str(usuario_atual),
-                    "data_hora": str(agora)
+                    "data_hora": str(agora),
+                    "usuario_alteracao": str(usuario_atual),
+                    "data_alteracao": str(agora)
                 }])
                 df_atual = pd.concat([df_atual, nova_linha], ignore_index=True)
                 salvar_aba("lancamentos", df_atual)
@@ -459,7 +496,7 @@ if opcao == "Lançamentos do Dia":
         df_c["Total Linha"] = df_c[cols_soma].sum(axis=1) - df_c["despesas"]
         
         df_exibir = df_c.rename(columns={"qtd": "Corrida Nº"})
-        cols_show = ["id", "Corrida Nº", "local", "dinheiro", "pix_bradesco", "pix_stones", "cartao", "gorjetas", "despesas", "Origem Desp."] + lista_extras + ["Total Linha", "obs", "usuario", "data_hora"]
+        cols_show = ["id", "Corrida Nº", "local", "dinheiro", "pix_bradesco", "pix_stones", "cartao", "gorjetas", "despesas", "Origem Desp."] + lista_extras + ["Total Linha", "obs", "usuario", "data_hora", "usuario_alteracao", "data_alteracao"]
         st.dataframe(df_exibir[cols_show], use_container_width=True, hide_index=True)
 
         with st.expander("✏️ Alterar ou Excluir Registro"):
@@ -497,7 +534,6 @@ if opcao == "Lançamentos do Dia":
                     st.error("Verifique os valores digitados na edição. Use apenas números e vírgula ou ponto.")
                 else:
                     agora = agora_br_str()
-                    dono_original = str(df_lanc.loc[idx_e, "usuario"].iloc[0])
                     
                     try:
                         extras_atual = json.loads(str(df_lanc.loc[idx_e, "extras"].iloc[0]))
@@ -517,8 +553,10 @@ if opcao == "Lançamentos do Dia":
                     df_lanc.loc[idx_e, "despesas"] = float(ed_desp)
                     df_lanc.loc[idx_e, "obs"] = str(ed_obs).strip()
                     df_lanc.loc[idx_e, "extras"] = json.dumps(extras_atual, ensure_ascii=False)
-                    df_lanc.loc[idx_e, "usuario"] = dono_original
-                    df_lanc.loc[idx_e, "data_hora"] = str(agora)
+                    
+                    # Na alteração, usuario e data_hora permanecem intactos; apenas usuario_alteracao e data_alteracao são atualizados
+                    df_lanc.loc[idx_e, "usuario_alteracao"] = str(usuario_atual)
+                    df_lanc.loc[idx_e, "data_alteracao"] = str(agora)
                     
                     salvar_aba("lancamentos", df_lanc)
                     st.success("Alterado com sucesso!")
@@ -558,7 +596,6 @@ if opcao == "Lançamentos do Dia":
     t_desp = df_c["despesas"].sum() if not df_c.empty else 0.0
     t_gorj = df_c["gorjetas"].sum() if not df_c.empty else 0.0
 
-    # Separa despesas pagas em Dinheiro vs Cartão/Conta
     if not df_c.empty:
         mask_desp_din = df_c["extras"].apply(lambda x: "Dinheiro" in extrair_origem_despesa(x))
         t_desp_din = df_c.loc[mask_desp_din, "despesas"].sum()
@@ -664,7 +701,6 @@ elif opcao == "Relatórios e Gráficos":
             )
             st.plotly_chart(fig_pie, use_container_width=True)
 
-            # Separa despesas nos gráficos para transparência total
             df_c["Entradas (com Gorjetas)"] = df_c["dinheiro"] + df_c["pix_bradesco"] + df_c["pix_stones"] + df_c["cartao"] + df_c["gorjetas"]
             df_c["Desp. Dinheiro (Caixa)"] = df_c.apply(lambda r: float(r["despesas"]) if "Dinheiro" in extrair_origem_despesa(r["extras"]) else 0.0, axis=1)
             df_c["Desp. Cartão/Conta"] = df_c["despesas"] - df_c["Desp. Dinheiro (Caixa)"]
@@ -692,7 +728,6 @@ elif opcao == "Relatórios e Gráficos":
                 fig_comp.update_layout(uniformtext_minsize=8, uniformtext_mode="show")
                 st.plotly_chart(fig_comp, use_container_width=True)
 
-        # Geração do Relatório em PDF e CSV
         metricas_pdf = {
             "qtd_corridas": tot_qtd_corridas,
             "tot_corr": tot_corr,
