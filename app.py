@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 import plotly.express as px
 import json
 from streamlit_gsheets import GSheetsConnection
+from fpdf import FPDF
 
 st.set_page_config(page_title="Controle de Fretes", layout="wide")
 
@@ -64,6 +65,124 @@ def converter_moeda(texto):
         return max(0.0, val)
     except ValueError:
         return None
+
+def extrair_origem_despesa(extras_str):
+    try:
+        if pd.notna(extras_str) and str(extras_str).startswith("{"):
+            d = json.loads(str(extras_str))
+            return d.get("_origem_despesa", "Cartão / Conta (Não sai do caixa)")
+    except Exception:
+        pass
+    return "Cartão / Conta (Não sai do caixa)"
+
+def fmt_brl(valor):
+    return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+def limpar_latin1(texto):
+    return str(texto).encode("latin-1", "replace").decode("latin-1")
+
+def gerar_pdf_relatorio(dt_ini, dt_fim, filtro_user, metricas, df_corridas):
+    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    # Cabeçalho
+    pdf.set_fill_color(30, 58, 138)
+    pdf.rect(0, 0, 210, 28, "F")
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.set_xy(10, 7)
+    pdf.cell(0, 8, limpar_latin1("RELATÓRIO DE CONTROLE DE FRETES"), ln=True)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_x(10)
+    periodo_txt = f"Período: {dt_ini.strftime('%d/%m/%Y')} a {dt_fim.strftime('%d/%m/%Y')}  |  Filtro: {filtro_user}  |  Emitido em: {agora_br_str()}"
+    pdf.cell(0, 6, limpar_latin1(periodo_txt), ln=True)
+
+    pdf.ln(10)
+    pdf.set_text_color(20, 20, 20)
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 8, limpar_latin1("1. Resumo Financeiro do Período"), ln=True)
+    pdf.ln(1)
+
+    # Tabela de Resumo em 2 colunas
+    pdf.set_font("Helvetica", "", 10)
+    linhas_resumo = [
+        ("Total de Corridas Realizadas", f"{metricas['qtd_corridas']}"),
+        ("Faturamento Bruto (Corridas)", fmt_brl(metricas["tot_corr"])),
+        ("Total em Dinheiro", fmt_brl(metricas["tot_din"])),
+        ("Total PIX (Bradesco + Stones) + Cartão", fmt_brl(metricas["tot_pix_c"])),
+        ("Total Gorjetas", fmt_brl(metricas["tot_gorj"])),
+        ("Total Diárias (Custo Operacional)", fmt_brl(metricas["tot_diar"])),
+        ("Despesas Pagas em Dinheiro (Sai do Caixa)", fmt_brl(metricas["desp_caixa"])),
+        ("Despesas no Cartão / Conta (Informativo)", fmt_brl(metricas["desp_cartao"])),
+        ("Total Geral de Despesas", fmt_brl(metricas["tot_desp"])),
+        ("Resultado Operacional (Faturamento + Gorjetas - Diárias)", fmt_brl(metricas["res_operacional"])),
+        ("Lucro Líquido Real de Caixa (Descontando só Desp. Dinheiro)", fmt_brl(metricas["lucro_real"])),
+    ]
+
+    for idx, (label, val) in enumerate(linhas_resumo):
+        destaque = idx >= 9
+        if destaque:
+            pdf.set_fill_color(220, 252, 231)
+            pdf.set_font("Helvetica", "B", 10)
+        else:
+            pdf.set_fill_color(245, 247, 250) if idx % 2 == 0 else pdf.set_fill_color(255, 255, 255)
+            pdf.set_font("Helvetica", "", 10)
+        pdf.cell(130, 7, limpar_latin1(f"  {label}"), border=1, fill=True)
+        pdf.cell(60, 7, limpar_latin1(f"{val}  "), border=1, align="R", fill=True, ln=True)
+
+    pdf.ln(6)
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 8, limpar_latin1("2. Detalhamento dos Lançamentos (Corridas e Despesas)"), ln=True)
+    pdf.ln(1)
+
+    if df_corridas.empty:
+        pdf.set_font("Helvetica", "I", 10)
+        pdf.cell(0, 8, limpar_latin1("Nenhum lançamento registrado no período selecionado."), ln=True)
+    else:
+        # Cabeçalho da tabela detalhada
+        pdf.set_fill_color(30, 58, 138)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 8)
+        w = [20, 46, 22, 20, 20, 20, 20, 22]
+        headers = ["Data", "Local / Desc.", "Motorista", "Dinheiro", "PIX/Cart.", "Gorjeta", "Despesa", "Origem Desp."]
+        for i, h in enumerate(headers):
+            pdf.cell(w[i], 7, limpar_latin1(h), border=1, align="C", fill=True)
+        pdf.ln()
+
+        pdf.set_text_color(20, 20, 20)
+        pdf.set_font("Helvetica", "", 7.5)
+        df_ord = df_corridas.sort_values(["data_ref", "id"])
+        for row_idx, (_, r) in enumerate(df_ord.iterrows()):
+            fill = row_idx % 2 == 1
+            pdf.set_fill_color(248, 250, 252) if fill else pdf.set_fill_color(255, 255, 255)
+            
+            try:
+                dt_fmt = datetime.strptime(str(r["data_ref"]), "%Y-%m-%d").strftime("%d/%m/%Y")
+            except Exception:
+                dt_fmt = str(r["data_ref"])
+
+            pix_cart_val = float(r["pix_bradesco"]) + float(r["pix_stones"]) + float(r["cartao"])
+            desp_val = float(r["despesas"])
+            origem_curta = "-"
+            if desp_val > 0:
+                orig = extrair_origem_despesa(r.get("extras", "{}"))
+                origem_curta = "Dinheiro" if "Dinheiro" in orig else "Cartão/Conta"
+
+            loc_txt = str(r["local"])[:26]
+            mot_txt = str(r["usuario"])[:12]
+
+            pdf.cell(w[0], 6, limpar_latin1(dt_fmt), border=1, align="C", fill=fill)
+            pdf.cell(w[1], 6, limpar_latin1(f" {loc_txt}"), border=1, align="L", fill=fill)
+            pdf.cell(w[2], 6, limpar_latin1(mot_txt), border=1, align="C", fill=fill)
+            pdf.cell(w[3], 6, limpar_latin1(f"{r['dinheiro']:.2f}"), border=1, align="R", fill=fill)
+            pdf.cell(w[4], 6, limpar_latin1(f"{pix_cart_val:.2f}"), border=1, align="R", fill=fill)
+            pdf.cell(w[5], 6, limpar_latin1(f"{r['gorjetas']:.2f}"), border=1, align="R", fill=fill)
+            pdf.cell(w[6], 6, limpar_latin1(f"{desp_val:.2f}"), border=1, align="R", fill=fill)
+            pdf.cell(w[7], 6, limpar_latin1(origem_curta), border=1, align="C", fill=fill)
+            pdf.ln()
+
+    return bytes(pdf.output())
 
 if "logado" not in st.session_state:
     st.session_state.logado = False
@@ -138,7 +257,8 @@ if opcao == "Lançamentos do Dia":
     val_caixa = val_caixa_num if val_caixa_num is not None else 0.0
     val_diaria = val_diaria_num if val_diaria_num is not None else 0.0
 
-    if st.button("Salvar Caixa e Diária", use_container_width=True):
+    c_btn1, c_btn2 = st.columns([3, 1])
+    if c_btn1.button("💾 Salvar Caixa e Diária", use_container_width=True):
         if val_caixa_num is None or val_diaria_num is None:
             st.error("Digite valores numéricos válidos para Caixa e Diária (Ex: 50 ou 50,00).")
         else:
@@ -171,6 +291,18 @@ if opcao == "Lançamentos do Dia":
             st.success("Caixa e Diária salvos com sucesso!")
             st.rerun()
 
+    # Botão para excluir os registros de Caixa e Diária do usuário na data selecionada
+    tem_caixa_ou_diaria = (not caixa_existente.empty) or (not diaria_existente.empty)
+    if c_btn2.button("🗑️ Excluir Caixa/Diária", use_container_width=True, disabled=not tem_caixa_ou_diaria):
+        with st.spinner("Excluindo Caixa e Diária..."):
+            df_atual = ler_aba("lancamentos")
+            if not df_atual.empty:
+                mask_remover = (df_atual["data_ref"] == data_str) & (df_atual["usuario"] == usuario_atual) & (df_atual["tipo"].isin(["CAIXA", "DIARIA"]))
+                df_atual = df_atual[~mask_remover]
+                salvar_aba("lancamentos", df_atual)
+        st.warning("Registros de Caixa e Diária excluídos para esta data!")
+        st.rerun()
+
     st.divider()
 
     df_c_dia_user = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CORRIDA") & (df_lanc["usuario"] == usuario_atual)] if not df_lanc.empty else pd.DataFrame()
@@ -195,11 +327,28 @@ if opcao == "Lançamentos do Dia":
     valor_txt = c_v2.text_input("Valor (R$)", placeholder="0,00", key=f"in_valor_{seq}")
     gorjetas_txt = c_v3.text_input("Gorjeta (R$)", placeholder="0,00", key=f"in_gorjeta_{seq}")
 
+    # Se o usuário selecionar Despesa, pergunta de onde saiu o pagamento para não distorcer o caixa
+    origem_despesa = "Cartão / Conta (Não sai do caixa)"
+    if tipo_pagamento == "Despesas (Gasolina/Manut.)":
+        origem_despesa = st.radio(
+            "💳 Como essa despesa foi paga?",
+            ["Cartão / Conta (Não sai do caixa)", "Dinheiro do Caixa (Sai da gaveta/espécie)"],
+            horizontal=True,
+            key=f"in_orig_desp_{seq}"
+        )
+
     pag_misto = st.checkbox("🔀 Pagamento dividido (Ex: parte em Dinheiro + parte em PIX)", key=f"in_misto_{seq}")
     if pag_misto:
         c_m1, c_m2 = st.columns([2, 3])
         tipo_pagamento_2 = c_m1.selectbox("2ª Forma de Pagamento / Tipo", opcoes_tipo_lanc, index=1, key=f"in_tipo2_{seq}")
         valor2_txt = c_m2.text_input("2º Valor (R$)", placeholder="0,00", key=f"in_valor2_{seq}")
+        if tipo_pagamento_2 == "Despesas (Gasolina/Manut.)" and tipo_pagamento != "Despesas (Gasolina/Manut.)":
+            origem_despesa = st.radio(
+                "💳 Como essa despesa foi paga?",
+                ["Cartão / Conta (Não sai do caixa)", "Dinheiro do Caixa (Sai da gaveta/espécie)"],
+                horizontal=True,
+                key=f"in_orig_desp2_{seq}"
+            )
     else:
         tipo_pagamento_2 = None
         valor2_txt = ""
@@ -242,6 +391,8 @@ if opcao == "Lançamentos do Dia":
             despesas = float(valores_mapa["Despesas (Gasolina/Manut.)"])
 
             extras_dict = {col_n: float(valores_mapa[col_n]) for col_n in lista_extras}
+            if despesas > 0:
+                extras_dict["_origem_despesa"] = origem_despesa
 
             with st.spinner("Salvando na planilha..."):
                 df_atual = ler_aba("lancamentos")
@@ -266,7 +417,7 @@ if opcao == "Lançamentos do Dia":
                     "gorjetas": float(gorjetas),
                     "despesas": despesas,
                     "obs": obs_limpa,
-                    "extras": json.dumps(extras_dict),
+                    "extras": json.dumps(extras_dict, ensure_ascii=False),
                     "usuario": str(usuario_atual),
                     "data_hora": str(agora)
                 }])
@@ -299,11 +450,16 @@ if opcao == "Lançamentos do Dia":
         for col_n in lista_extras:
             df_c[col_n] = df_c["extras"].apply(lambda x: json.loads(str(x)).get(col_n, 0.0) if pd.notna(x) and str(x).startswith("{") else 0.0)
         
+        df_c["Origem Desp."] = df_c.apply(
+            lambda r: ("Dinheiro" if "Dinheiro" in extrair_origem_despesa(r["extras"]) else "Cartão/Conta") if float(r["despesas"]) > 0 else "-",
+            axis=1
+        )
+        
         cols_soma = ["dinheiro", "pix_bradesco", "pix_stones", "cartao", "gorjetas"] + lista_extras
         df_c["Total Linha"] = df_c[cols_soma].sum(axis=1) - df_c["despesas"]
         
         df_exibir = df_c.rename(columns={"qtd": "Corrida Nº"})
-        cols_show = ["id", "Corrida Nº", "local", "dinheiro", "pix_bradesco", "pix_stones", "cartao", "gorjetas", "despesas"] + lista_extras + ["Total Linha", "obs", "usuario", "data_hora"]
+        cols_show = ["id", "Corrida Nº", "local", "dinheiro", "pix_bradesco", "pix_stones", "cartao", "gorjetas", "despesas", "Origem Desp."] + lista_extras + ["Total Linha", "obs", "usuario", "data_hora"]
         st.dataframe(df_exibir[cols_show], use_container_width=True, hide_index=True)
 
         with st.expander("✏️ Alterar ou Excluir Registro"):
@@ -316,6 +472,16 @@ if opcao == "Lançamentos do Dia":
             ed_cart_txt = st.text_input("Cartão", value=f"{float(df_lanc.loc[idx_e, 'cartao'].iloc[0]):.2f}".replace(".", ","), key=f"ed_cart_{id_edit}")
             ed_gorj_txt = st.text_input("Gorjetas", value=f"{float(df_lanc.loc[idx_e, 'gorjetas'].iloc[0]):.2f}".replace(".", ","), key=f"ed_gorj_{id_edit}")
             ed_desp_txt = st.text_input("Despesas", value=f"{float(df_lanc.loc[idx_e, 'despesas'].iloc[0]):.2f}".replace(".", ","), key=f"ed_desp_{id_edit}")
+            
+            orig_atual = extrair_origem_despesa(df_lanc.loc[idx_e, "extras"].iloc[0])
+            idx_orig = 1 if "Dinheiro" in orig_atual else 0
+            ed_orig_desp = st.radio(
+                "Origem do Pagamento da Despesa (se houver)",
+                ["Cartão / Conta (Não sai do caixa)", "Dinheiro do Caixa (Sai da gaveta/espécie)"],
+                index=idx_orig,
+                horizontal=True,
+                key=f"ed_orig_{id_edit}"
+            )
             obs_val = str(df_lanc.loc[idx_e, "obs"].iloc[0])
             ed_obs = st.text_input("Obs", value=obs_val, key=f"ed_obs_{id_edit}")
 
@@ -333,6 +499,15 @@ if opcao == "Lançamentos do Dia":
                     agora = agora_br_str()
                     dono_original = str(df_lanc.loc[idx_e, "usuario"].iloc[0])
                     
+                    try:
+                        extras_atual = json.loads(str(df_lanc.loc[idx_e, "extras"].iloc[0]))
+                    except Exception:
+                        extras_atual = {}
+                    if float(ed_desp) > 0:
+                        extras_atual["_origem_despesa"] = ed_orig_desp
+                    else:
+                        extras_atual.pop("_origem_despesa", None)
+
                     df_lanc.loc[idx_e, "local"] = str(ed_loc).strip()
                     df_lanc.loc[idx_e, "dinheiro"] = float(ed_din)
                     df_lanc.loc[idx_e, "pix_bradesco"] = float(ed_brad)
@@ -341,6 +516,7 @@ if opcao == "Lançamentos do Dia":
                     df_lanc.loc[idx_e, "gorjetas"] = float(ed_gorj)
                     df_lanc.loc[idx_e, "despesas"] = float(ed_desp)
                     df_lanc.loc[idx_e, "obs"] = str(ed_obs).strip()
+                    df_lanc.loc[idx_e, "extras"] = json.dumps(extras_atual, ensure_ascii=False)
                     df_lanc.loc[idx_e, "usuario"] = dono_original
                     df_lanc.loc[idx_e, "data_hora"] = str(agora)
                     
@@ -382,15 +558,24 @@ if opcao == "Lançamentos do Dia":
     t_desp = df_c["despesas"].sum() if not df_c.empty else 0.0
     t_gorj = df_c["gorjetas"].sum() if not df_c.empty else 0.0
 
+    # Separa despesas pagas em Dinheiro vs Cartão/Conta
+    if not df_c.empty:
+        mask_desp_din = df_c["extras"].apply(lambda x: "Dinheiro" in extrair_origem_despesa(x))
+        t_desp_din = df_c.loc[mask_desp_din, "despesas"].sum()
+        t_desp_cart = t_desp - t_desp_din
+    else:
+        t_desp_din = 0.0
+        t_desp_cart = 0.0
+
     st.metric("Total de Corridas Feitas no Dia", f"{total_corridas_feitas}")
     st.metric("1. Total de Dinheiro (no dia)", f"R$ {t_din:.2f}")
     st.metric("2. Total PIX + Cartão", f"R$ {t_pix_c:.2f}")
     st.metric("3. Total Corridas (Dinheiro + PIX + Cartão)", f"R$ {t_corr:.2f}")
     st.metric("4. Total Corridas - Diária", f"R$ {(t_corr - res_diaria):.2f}")
-    st.metric("5. Total Caixa + Dinheiro - Diária", f"R$ {(res_caixa + t_din - res_diaria):.2f}")
-    st.metric("6. Total Dinheiro - Diária (Acerto Espécie)", f"R$ {(t_din - res_diaria):.2f}")
-    st.info(f"**Total Despesas:** R$ {t_desp:.2f} | **Gorjetas:** R$ {t_gorj:.2f}")
-    st.success(f"**Lucro Líquido Real (Corridas + Gorjetas - Diária - Despesas): R$ {(t_corr + t_gorj - res_diaria - t_desp):.2f}**")
+    st.metric("5. Total Caixa + Dinheiro - Diária - Desp. Dinheiro", f"R$ {(res_caixa + t_din - res_diaria - t_desp_din):.2f}")
+    st.metric("6. Total Dinheiro - Diária - Desp. Dinheiro (Acerto Espécie)", f"R$ {(t_din - res_diaria - t_desp_din):.2f}")
+    st.info(f"**Despesas Totais:** R$ {t_desp:.2f} (Cartão/Conta: R$ {t_desp_cart:.2f} | Dinheiro: R$ {t_desp_din:.2f}) | **Gorjetas:** R$ {t_gorj:.2f}")
+    st.success(f"**Lucro Líquido Real de Caixa (Corridas + Gorjetas - Diária - Desp. Dinheiro): R$ {(t_corr + t_gorj - res_diaria - t_desp_din):.2f}**")
 
 elif opcao == "Relatórios e Gráficos":
     st.header("📈 Relatórios por Período")
@@ -400,6 +585,7 @@ elif opcao == "Relatórios e Gráficos":
     dt_fim = c_dt2.date_input("Data Final", value=hoje_atual)
 
     df_lanc = ler_aba("lancamentos")
+    filtro_rel_user = usuario_atual
     if not df_lanc.empty:
         if eh_admin:
             df_u_lista = ler_aba("usuarios")
@@ -426,14 +612,33 @@ elif opcao == "Relatórios e Gráficos":
         tot_desp = df_c["despesas"].sum()
         tot_gorj = df_c["gorjetas"].sum()
 
-        st.metric("Total de Corridas no Período", f"{tot_qtd_corridas}")
-        st.metric("Faturamento Corridas", f"R$ {tot_corr:.2f}")
-        st.metric("Total Dinheiro", f"R$ {tot_din:.2f}")
-        st.metric("Total PIX + Cartão", f"R$ {tot_pix_c:.2f}")
-        st.metric("Total Gorjetas", f"R$ {tot_gorj:.2f}")
-        st.metric("Total Diárias", f"R$ {tot_diar:.2f}")
-        st.metric("Total Despesas", f"R$ {tot_desp:.2f}")
-        st.success(f"**Saldo Líquido do Período: R$ {(tot_corr + tot_gorj - tot_diar - tot_desp):.2f}**")
+        if not df_c.empty:
+            mask_desp_din = df_c["extras"].apply(lambda x: "Dinheiro" in extrair_origem_despesa(x))
+            tot_desp_din = df_c.loc[mask_desp_din, "despesas"].sum()
+            tot_desp_cart = tot_desp - tot_desp_din
+        else:
+            tot_desp_din = 0.0
+            tot_desp_cart = 0.0
+
+        res_operacional = tot_corr + tot_gorj - tot_diar
+        lucro_real_caixa = tot_corr + tot_gorj - tot_diar - tot_desp_din
+
+        c_m1, c_m2, c_m3 = st.columns(3)
+        c_m1.metric("Total de Corridas no Período", f"{tot_qtd_corridas}")
+        c_m2.metric("Faturamento Corridas", f"R$ {tot_corr:.2f}")
+        c_m3.metric("Total Gorjetas", f"R$ {tot_gorj:.2f}")
+
+        c_m4, c_m5, c_m6 = st.columns(3)
+        c_m4.metric("Total Dinheiro", f"R$ {tot_din:.2f}")
+        c_m5.metric("Total PIX + Cartão", f"R$ {tot_pix_c:.2f}")
+        c_m6.metric("Total Diárias", f"R$ {tot_diar:.2f}")
+
+        c_m7, c_m8, c_m9 = st.columns(3)
+        c_m7.metric("Despesas Cartão/Conta (Informativo)", f"R$ {tot_desp_cart:.2f}")
+        c_m8.metric("Despesas em Dinheiro (Sai do Caixa)", f"R$ {tot_desp_din:.2f}")
+        c_m9.metric("Resultado Operacional (sem desp. cartão)", f"R$ {res_operacional:.2f}")
+
+        st.success(f"**Lucro Líquido Real de Caixa (Entradas + Gorjetas - Diárias - Desp. Dinheiro): R$ {lucro_real_caixa:.2f}**")
 
         if not df_c.empty:
             val_din_pie = df_c["dinheiro"].sum()
@@ -459,12 +664,16 @@ elif opcao == "Relatórios e Gráficos":
             )
             st.plotly_chart(fig_pie, use_container_width=True)
 
-            df_c["Faturamento"] = df_c["dinheiro"] + df_c["pix_bradesco"] + df_c["pix_stones"] + df_c["cartao"] + df_c["gorjetas"]
-            df_agrup = df_c.groupby("data_ref")[["Faturamento", "despesas"]].sum().reset_index()
-            df_agrup = df_agrup.rename(columns={"despesas": "Despesas", "data_ref": "Data"})
+            # Separa despesas nos gráficos para transparência total
+            df_c["Entradas (com Gorjetas)"] = df_c["dinheiro"] + df_c["pix_bradesco"] + df_c["pix_stones"] + df_c["cartao"] + df_c["gorjetas"]
+            df_c["Desp. Dinheiro (Caixa)"] = df_c.apply(lambda r: float(r["despesas"]) if "Dinheiro" in extrair_origem_despesa(r["extras"]) else 0.0, axis=1)
+            df_c["Desp. Cartão/Conta"] = df_c["despesas"] - df_c["Desp. Dinheiro (Caixa)"]
+
+            df_agrup = df_c.groupby("data_ref")[["Entradas (com Gorjetas)", "Desp. Dinheiro (Caixa)", "Desp. Cartão/Conta"]].sum().reset_index()
+            df_agrup = df_agrup.rename(columns={"data_ref": "Data"})
             fig_bar = px.bar(
-                df_agrup, x="Data", y=["Faturamento", "Despesas"], barmode="group",
-                title="Evolução Diária: Entradas (com Gorjetas) x Despesas", labels={"value": "Valor (R$)", "variable": "Categoria"},
+                df_agrup, x="Data", y=["Entradas (com Gorjetas)", "Desp. Dinheiro (Caixa)", "Desp. Cartão/Conta"], barmode="group",
+                title="Evolução Diária: Entradas x Despesas (Separadas por Origem)", labels={"value": "Valor (R$)", "variable": "Categoria"},
                 text_auto=True
             )
             fig_bar.update_traces(texttemplate="R$ %{y:,.2f}", textposition="outside")
@@ -472,19 +681,50 @@ elif opcao == "Relatórios e Gráficos":
             st.plotly_chart(fig_bar, use_container_width=True)
 
             if eh_admin and filtro_rel_user == "Todos os Usuários":
-                df_comp = df_c.groupby("usuario")[["Faturamento", "despesas"]].sum().reset_index()
-                df_comp = df_comp.rename(columns={"usuario": "Motorista", "despesas": "Despesas"})
+                df_comp = df_c.groupby("usuario")[["Entradas (com Gorjetas)", "Desp. Dinheiro (Caixa)", "Desp. Cartão/Conta"]].sum().reset_index()
+                df_comp = df_comp.rename(columns={"usuario": "Motorista"})
                 fig_comp = px.bar(
-                    df_comp, x="Motorista", y=["Faturamento", "Despesas"], barmode="group",
-                    title="Comparativo por Usuário: Entradas (com Gorjetas) x Despesas", labels={"value": "Valor (R$)", "variable": "Categoria"},
+                    df_comp, x="Motorista", y=["Entradas (com Gorjetas)", "Desp. Dinheiro (Caixa)", "Desp. Cartão/Conta"], barmode="group",
+                    title="Comparativo por Usuário: Entradas x Despesas", labels={"value": "Valor (R$)", "variable": "Categoria"},
                     text_auto=True
                 )
                 fig_comp.update_traces(texttemplate="R$ %{y:,.2f}", textposition="outside")
                 fig_comp.update_layout(uniformtext_minsize=8, uniformtext_mode="show")
                 st.plotly_chart(fig_comp, use_container_width=True)
 
+        # Geração do Relatório em PDF e CSV
+        metricas_pdf = {
+            "qtd_corridas": tot_qtd_corridas,
+            "tot_corr": tot_corr,
+            "tot_din": tot_din,
+            "tot_pix_c": tot_pix_c,
+            "tot_gorj": tot_gorj,
+            "tot_diar": tot_diar,
+            "desp_caixa": tot_desp_din,
+            "desp_cartao": tot_desp_cart,
+            "tot_desp": tot_desp,
+            "res_operacional": res_operacional,
+            "lucro_real": lucro_real_caixa
+        }
+        pdf_bytes = gerar_pdf_relatorio(dt_ini, dt_fim, filtro_rel_user, metricas_pdf, df_c)
+
+        c_dl1, c_dl2 = st.columns(2)
+        c_dl1.download_button(
+            "📄 Baixar Relatório Apresentável (PDF)",
+            data=pdf_bytes,
+            file_name=f"relatorio_fretes_{dt_ini}_{dt_fim}.pdf",
+            mime="application/pdf",
+            type="primary",
+            use_container_width=True
+        )
         csv = df_p.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig")
-        st.download_button("📥 Baixar Relatório Completo (CSV/Excel)", data=csv, file_name=f"relatorio_{dt_ini}_{dt_fim}.csv", mime="text/csv", use_container_width=True)
+        c_dl2.download_button(
+            "📥 Baixar Planilha Bruta (CSV/Excel)",
+            data=csv,
+            file_name=f"relatorio_{dt_ini}_{dt_fim}.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
 
 elif opcao == "Administração" and eh_admin:
     st.header("⚙️ Administração")
