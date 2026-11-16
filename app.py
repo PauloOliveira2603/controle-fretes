@@ -9,10 +9,37 @@ st.set_page_config(page_title="Controle de Fretes", layout="wide")
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
+COLS_NUMERICAS = ["dinheiro", "pix_bradesco", "pix_stones", "cartao", "gorjetas", "despesas"]
+COLS_TEXTO = ["data_ref", "tipo", "local", "obs", "extras", "usuario", "data_hora"]
+
+def normalizar_df_lancamentos(df):
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["id", "data_ref", "tipo", "qtd", "local", "dinheiro", "pix_bradesco", "pix_stones", "cartao", "gorjetas", "despesas", "obs", "extras", "usuario", "data_hora"])
+    df = df.copy()
+    for col in COLS_NUMERICAS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0).astype(float)
+    for col in COLS_TEXTO:
+        if col in df.columns:
+            df[col] = df[col].fillna("").astype(str)
+            df[col] = df[col].replace({"nan": "", "None": "", "<NA>": ""})
+    if "usuario" in df.columns:
+        df["usuario"] = df["usuario"].str.strip()
+    if "id" in df.columns:
+        df["id"] = pd.to_numeric(df["id"], errors="coerce").fillna(0).astype(int)
+    if "qtd" in df.columns:
+        df["qtd"] = pd.to_numeric(df["qtd"], errors="coerce").fillna(0).astype(int)
+    return df
+
 def ler_aba(aba):
-    return conn.read(worksheet=aba, ttl=0)
+    df = conn.read(worksheet=aba, ttl=0)
+    if aba == "lancamentos":
+        return normalizar_df_lancamentos(df)
+    return df
 
 def salvar_aba(aba, df):
+    if aba == "lancamentos":
+        df = normalizar_df_lancamentos(df)
     conn.update(worksheet=aba, data=df)
 
 def converter_moeda(texto):
@@ -77,9 +104,6 @@ if opcao == "Lançamentos do Dia":
     df_cols = ler_aba("colunas_extras")
     lista_extras = df_cols["nome_coluna"].dropna().tolist() if not df_cols.empty else []
 
-    if not df_lanc.empty:
-        df_lanc["usuario"] = df_lanc["usuario"].astype(str).str.strip()
-
     usuario_filtro_dia = usuario_atual
     if eh_admin:
         df_u_lista = ler_aba("usuarios")
@@ -111,25 +135,27 @@ if opcao == "Lançamentos do Dia":
         else:
             with st.spinner("Salvando Caixa e Diária..."):
                 df_atual = ler_aba("lancamentos")
-                if not df_atual.empty:
-                    df_atual["usuario"] = df_atual["usuario"].astype(str).str.strip()
                 agora = datetime.now().strftime("%d/%m/%Y %H:%M")
 
                 idx_c = df_atual[(df_atual["data_ref"] == data_str) & (df_atual["tipo"] == "CAIXA") & (df_atual["usuario"] == usuario_atual)].index if not df_atual.empty else []
                 idx_d = df_atual[(df_atual["data_ref"] == data_str) & (df_atual["tipo"] == "DIARIA") & (df_atual["usuario"] == usuario_atual)].index if not df_atual.empty else []
 
                 if len(idx_c) > 0:
-                    df_atual.loc[idx_c, ["dinheiro", "usuario", "data_hora"]] = [val_caixa, usuario_atual, agora]
+                    df_atual.loc[idx_c, "dinheiro"] = float(val_caixa)
+                    df_atual.loc[idx_c, "usuario"] = str(usuario_atual)
+                    df_atual.loc[idx_c, "data_hora"] = str(agora)
                 else:
                     novo_id = 1 if df_atual.empty else int(df_atual["id"].max()) + 1
-                    nova_c = pd.DataFrame([{"id": novo_id, "data_ref": data_str, "tipo": "CAIXA", "qtd": 0, "local": "Caixa", "dinheiro": val_caixa, "pix_bradesco": 0.0, "pix_stones": 0.0, "cartao": 0.0, "gorjetas": 0.0, "despesas": 0.0, "obs": "", "extras": "{}", "usuario": usuario_atual, "data_hora": agora}])
+                    nova_c = pd.DataFrame([{"id": novo_id, "data_ref": data_str, "tipo": "CAIXA", "qtd": 0, "local": "Caixa", "dinheiro": float(val_caixa), "pix_bradesco": 0.0, "pix_stones": 0.0, "cartao": 0.0, "gorjetas": 0.0, "despesas": 0.0, "obs": "", "extras": "{}", "usuario": usuario_atual, "data_hora": agora}])
                     df_atual = pd.concat([df_atual, nova_c], ignore_index=True)
 
                 if len(idx_d) > 0:
-                    df_atual.loc[idx_d, ["dinheiro", "usuario", "data_hora"]] = [-abs(val_diaria), usuario_atual, agora]
+                    df_atual.loc[idx_d, "dinheiro"] = float(-abs(val_diaria))
+                    df_atual.loc[idx_d, "usuario"] = str(usuario_atual)
+                    df_atual.loc[idx_d, "data_hora"] = str(agora)
                 else:
                     novo_id = 1 if df_atual.empty else int(df_atual["id"].max()) + 1
-                    nova_d = pd.DataFrame([{"id": novo_id, "data_ref": data_str, "tipo": "DIARIA", "qtd": 0, "local": "Diária", "dinheiro": -abs(val_diaria), "pix_bradesco": 0.0, "pix_stones": 0.0, "cartao": 0.0, "gorjetas": 0.0, "despesas": 0.0, "obs": "", "extras": "{}", "usuario": usuario_atual, "data_hora": agora}])
+                    nova_d = pd.DataFrame([{"id": novo_id, "data_ref": data_str, "tipo": "DIARIA", "qtd": 0, "local": "Diária", "dinheiro": float(-abs(val_diaria)), "pix_bradesco": 0.0, "pix_stones": 0.0, "cartao": 0.0, "gorjetas": 0.0, "despesas": 0.0, "obs": "", "extras": "{}", "usuario": usuario_atual, "data_hora": agora}])
                     df_atual = pd.concat([df_atual, nova_d], ignore_index=True)
 
                 salvar_aba("lancamentos", df_atual)
@@ -160,7 +186,6 @@ if opcao == "Lançamentos do Dia":
     valor_txt = c_v2.text_input("Valor (R$)", placeholder="0,00", key=f"in_valor_{seq}")
     gorjetas_txt = c_v3.text_input("Gorjeta (R$)", placeholder="0,00", key=f"in_gorjeta_{seq}")
 
-    # Pagamento misto (parte em uma forma + parte em outra na mesma corrida)
     pag_misto = st.checkbox("🔀 Pagamento dividido (Ex: parte em Dinheiro + parte em PIX)", key=f"in_misto_{seq}")
     if pag_misto:
         c_m1, c_m2 = st.columns([2, 3])
@@ -176,6 +201,7 @@ if opcao == "Lançamentos do Dia":
         valor1 = converter_moeda(valor_txt)
         valor2 = converter_moeda(valor2_txt) if pag_misto else 0.0
         gorjetas = converter_moeda(gorjetas_txt)
+        obs_limpa = str(obs).strip() if obs else ""
 
         if not local or not local.strip():
             st.warning("Preencha o campo Local / Descrição antes de adicionar.")
@@ -186,7 +212,6 @@ if opcao == "Lançamentos do Dia":
         elif pag_misto and tipo_pagamento == tipo_pagamento_2:
             st.warning("Escolha formas de pagamento diferentes para o pagamento dividido.")
         else:
-            # Soma os valores nas colunas correspondentes (suporta pagamento simples ou dividido)
             valores_mapa = {
                 "Dinheiro": 0.0,
                 "PIX Bradesco": 0.0,
@@ -197,22 +222,21 @@ if opcao == "Lançamentos do Dia":
             for col_n in lista_extras:
                 valores_mapa[col_n] = 0.0
 
-            valores_mapa[tipo_pagamento] += valor1
+            valores_mapa[tipo_pagamento] += float(valor1)
             if pag_misto and tipo_pagamento_2:
-                valores_mapa[tipo_pagamento_2] += valor2
+                valores_mapa[tipo_pagamento_2] += float(valor2)
 
-            dinheiro = valores_mapa["Dinheiro"]
-            pix_brad = valores_mapa["PIX Bradesco"]
-            pix_ston = valores_mapa["PIX Stones"]
-            cartao = valores_mapa["Cartão"]
-            despesas = valores_mapa["Despesas (Gasolina/Manut.)"]
+            dinheiro = float(valores_mapa["Dinheiro"])
+            pix_brad = float(valores_mapa["PIX Bradesco"])
+            pix_ston = float(valores_mapa["PIX Stones"])
+            cartao = float(valores_mapa["Cartão"])
+            despesas = float(valores_mapa["Despesas (Gasolina/Manut.)"])
 
-            extras_dict = {col_n: valores_mapa[col_n] for col_n in lista_extras}
+            extras_dict = {col_n: float(valores_mapa[col_n]) for col_n in lista_extras}
 
             with st.spinner("Salvando na planilha..."):
                 df_atual = ler_aba("lancamentos")
                 if not df_atual.empty:
-                    df_atual["usuario"] = df_atual["usuario"].astype(str).str.strip()
                     df_atual_dia = df_atual[(df_atual["data_ref"] == data_str) & (df_atual["tipo"] == "CORRIDA") & (df_atual["usuario"] == usuario_atual)]
                 else:
                     df_atual_dia = pd.DataFrame()
@@ -221,10 +245,21 @@ if opcao == "Lançamentos do Dia":
                 agora = datetime.now().strftime("%d/%m/%Y %H:%M")
                 novo_id = 1 if df_atual.empty else int(df_atual["id"].max()) + 1
                 nova_linha = pd.DataFrame([{
-                    "id": novo_id, "data_ref": data_str, "tipo": "CORRIDA", "qtd": num_corrida_atual, "local": local.strip(),
-                    "dinheiro": dinheiro, "pix_bradesco": pix_brad, "pix_stones": pix_ston, "cartao": cartao,
-                    "gorjetas": gorjetas, "despesas": despesas, "obs": obs.strip(), "extras": json.dumps(extras_dict),
-                    "usuario": usuario_atual, "data_hora": agora
+                    "id": int(novo_id),
+                    "data_ref": str(data_str),
+                    "tipo": "CORRIDA",
+                    "qtd": int(num_corrida_atual),
+                    "local": str(local).strip(),
+                    "dinheiro": dinheiro,
+                    "pix_bradesco": pix_brad,
+                    "pix_stones": pix_ston,
+                    "cartao": cartao,
+                    "gorjetas": float(gorjetas),
+                    "despesas": despesas,
+                    "obs": obs_limpa,
+                    "extras": json.dumps(extras_dict),
+                    "usuario": str(usuario_atual),
+                    "data_hora": str(agora)
                 }])
                 df_atual = pd.concat([df_atual, nova_linha], ignore_index=True)
                 salvar_aba("lancamentos", df_atual)
@@ -265,15 +300,15 @@ if opcao == "Lançamentos do Dia":
         with st.expander("✏️ Alterar ou Excluir Registro"):
             id_edit = st.selectbox("Escolha o ID", df_c["id"].astype(int).tolist())
             idx_e = df_lanc[df_lanc["id"] == id_edit].index
-            ed_loc = st.text_input("Local", value=str(df_lanc.loc[idx_e, "local"].iloc[0]))
-            ed_din_txt = st.text_input("Dinheiro", value=f"{float(df_lanc.loc[idx_e, 'dinheiro'].iloc[0]):.2f}".replace(".", ","))
-            ed_brad_txt = st.text_input("PIX Bradesco", value=f"{float(df_lanc.loc[idx_e, 'pix_bradesco'].iloc[0]):.2f}".replace(".", ","))
-            ed_ston_txt = st.text_input("PIX Stones", value=f"{float(df_lanc.loc[idx_e, 'pix_stones'].iloc[0]):.2f}".replace(".", ","))
-            ed_cart_txt = st.text_input("Cartão", value=f"{float(df_lanc.loc[idx_e, 'cartao'].iloc[0]):.2f}".replace(".", ","))
-            ed_gorj_txt = st.text_input("Gorjetas", value=f"{float(df_lanc.loc[idx_e, 'gorjetas'].iloc[0]):.2f}".replace(".", ","))
-            ed_desp_txt = st.text_input("Despesas", value=f"{float(df_lanc.loc[idx_e, 'despesas'].iloc[0]):.2f}".replace(".", ","))
-            obs_val = df_lanc.loc[idx_e, "obs"].iloc[0]
-            ed_obs = st.text_input("Obs", value=str(obs_val) if pd.notna(obs_val) else "")
+            ed_loc = st.text_input("Local", value=str(df_lanc.loc[idx_e, "local"].iloc[0]), key=f"ed_loc_{id_edit}")
+            ed_din_txt = st.text_input("Dinheiro", value=f"{float(df_lanc.loc[idx_e, 'dinheiro'].iloc[0]):.2f}".replace(".", ","), key=f"ed_din_{id_edit}")
+            ed_brad_txt = st.text_input("PIX Bradesco", value=f"{float(df_lanc.loc[idx_e, 'pix_bradesco'].iloc[0]):.2f}".replace(".", ","), key=f"ed_brad_{id_edit}")
+            ed_ston_txt = st.text_input("PIX Stones", value=f"{float(df_lanc.loc[idx_e, 'pix_stones'].iloc[0]):.2f}".replace(".", ","), key=f"ed_ston_{id_edit}")
+            ed_cart_txt = st.text_input("Cartão", value=f"{float(df_lanc.loc[idx_e, 'cartao'].iloc[0]):.2f}".replace(".", ","), key=f"ed_cart_{id_edit}")
+            ed_gorj_txt = st.text_input("Gorjetas", value=f"{float(df_lanc.loc[idx_e, 'gorjetas'].iloc[0]):.2f}".replace(".", ","), key=f"ed_gorj_{id_edit}")
+            ed_desp_txt = st.text_input("Despesas", value=f"{float(df_lanc.loc[idx_e, 'despesas'].iloc[0]):.2f}".replace(".", ","), key=f"ed_desp_{id_edit}")
+            obs_val = str(df_lanc.loc[idx_e, "obs"].iloc[0])
+            ed_obs = st.text_input("Obs", value=obs_val, key=f"ed_obs_{id_edit}")
 
             if st.button("💾 Salvar Alteração", use_container_width=True):
                 ed_din = converter_moeda(ed_din_txt)
@@ -287,16 +322,26 @@ if opcao == "Lançamentos do Dia":
                     st.error("Verifique os valores digitados na edição. Use apenas números e vírgula ou ponto.")
                 else:
                     agora = datetime.now().strftime("%d/%m/%Y %H:%M")
-                    dono_original = df_lanc.loc[idx_e, "usuario"].iloc[0]
-                    df_lanc.loc[idx_e, ["local", "dinheiro", "pix_bradesco", "pix_stones", "cartao", "gorjetas", "despesas", "obs", "usuario", "data_hora"]] = [
-                        ed_loc, ed_din, ed_brad, ed_ston, ed_cart, ed_gorj, ed_desp, ed_obs, dono_original, agora
-                    ]
+                    dono_original = str(df_lanc.loc[idx_e, "usuario"].iloc[0])
+                    
+                    # Atualiza coluna por coluna com tipagem explícita para evitar LossySetitemError
+                    df_lanc.loc[idx_e, "local"] = str(ed_loc).strip()
+                    df_lanc.loc[idx_e, "dinheiro"] = float(ed_din)
+                    df_lanc.loc[idx_e, "pix_bradesco"] = float(ed_brad)
+                    df_lanc.loc[idx_e, "pix_stones"] = float(ed_ston)
+                    df_lanc.loc[idx_e, "cartao"] = float(ed_cart)
+                    df_lanc.loc[idx_e, "gorjetas"] = float(ed_gorj)
+                    df_lanc.loc[idx_e, "despesas"] = float(ed_desp)
+                    df_lanc.loc[idx_e, "obs"] = str(ed_obs).strip()
+                    df_lanc.loc[idx_e, "usuario"] = dono_original
+                    df_lanc.loc[idx_e, "data_hora"] = str(agora)
+                    
                     salvar_aba("lancamentos", df_lanc)
-                    st.success("Alterado!")
+                    st.success("Alterado com sucesso!")
                     st.rerun()
 
             if st.button("🗑️ Excluir Registro", use_container_width=True):
-                dono_excluido = df_lanc.loc[idx_e, "usuario"].iloc[0]
+                dono_excluido = str(df_lanc.loc[idx_e, "usuario"].iloc[0])
                 df_lanc = df_lanc.drop(idx_e)
                 mask_dia_corr = (df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CORRIDA") & (df_lanc["usuario"] == dono_excluido)
                 df_lanc.loc[mask_dia_corr, "qtd"] = range(1, mask_dia_corr.sum() + 1)
@@ -347,8 +392,6 @@ elif opcao == "Relatórios e Gráficos":
 
     df_lanc = ler_aba("lancamentos")
     if not df_lanc.empty:
-        df_lanc["usuario"] = df_lanc["usuario"].astype(str).str.strip()
-        
         if eh_admin:
             df_u_lista = ler_aba("usuarios")
             nomes_cadastrados = sorted(df_u_lista["nome"].dropna().astype(str).str.strip().unique().tolist()) if not df_u_lista.empty else []
