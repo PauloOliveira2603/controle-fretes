@@ -73,38 +73,51 @@ if opcao == "Lançamentos do Dia":
         opcoes_filtro = ["Todos os Usuários"] + nomes_cadastrados
         usuario_filtro_dia = st.selectbox("👤 Visualizar dados de:", opcoes_filtro)
 
-    # Cria Caixa e Diária individuais para o usuário logado no dia, caso não existam
-    df_dia_user = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["usuario"] == usuario_atual)] if not df_lanc.empty else pd.DataFrame()
-    if df_dia_user.empty or "CAIXA" not in df_dia_user["tipo"].values:
-        agora = datetime.now().strftime("%d/%m/%Y %H:%M")
-        novo_id = 1 if df_lanc.empty else int(df_lanc["id"].max()) + 1
-        fixos = pd.DataFrame([
-            {"id": novo_id, "data_ref": data_str, "tipo": "CAIXA", "qtd": 0, "local": "Caixa", "dinheiro": 0.0, "pix_bradesco": 0.0, "pix_stones": 0.0, "cartao": 0.0, "gorjetas": 0.0, "despesas": 0.0, "obs": "", "extras": "{}", "usuario": usuario_atual, "data_hora": agora},
-            {"id": novo_id + 1, "data_ref": data_str, "tipo": "DIARIA", "qtd": 0, "local": "Diária", "dinheiro": 0.0, "pix_bradesco": 0.0, "pix_stones": 0.0, "cartao": 0.0, "gorjetas": 0.0, "despesas": 0.0, "obs": "", "extras": "{}", "usuario": usuario_atual, "data_hora": agora}
-        ])
-        df_lanc = pd.concat([df_lanc, fixos], ignore_index=True)
-        salvar_aba("lancamentos", df_lanc)
-        st.rerun()
+    # Busca valores atuais de Caixa e Diária do usuário sem gravar nada automaticamente na planilha
+    caixa_existente = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CAIXA") & (df_lanc["usuario"] == usuario_atual)] if not df_lanc.empty else pd.DataFrame()
+    diaria_existente = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "DIARIA") & (df_lanc["usuario"] == usuario_atual)] if not df_lanc.empty else pd.DataFrame()
 
-    idx_caixa = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CAIXA") & (df_lanc["usuario"] == usuario_atual)].index
-    idx_diaria = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "DIARIA") & (df_lanc["usuario"] == usuario_atual)].index
+    valor_inicial_caixa = float(caixa_existente["dinheiro"].iloc[0]) if not caixa_existente.empty else 0.0
+    valor_inicial_diaria = abs(float(diaria_existente["dinheiro"].iloc[0])) if not diaria_existente.empty else 0.0
 
     st.subheader(f"1. Caixa e Diária ({usuario_atual})")
     c_f1, c_f2 = st.columns(2)
-    val_caixa = c_f1.number_input("💰 Dinheiro em Caixa (R$)", value=float(df_lanc.loc[idx_caixa, "dinheiro"].iloc[0]), step=1.0)
-    val_diaria = c_f2.number_input("📅 Diária do Dia (R$)", value=abs(float(df_lanc.loc[idx_diaria, "dinheiro"].iloc[0])), step=5.0)
+    val_caixa = c_f1.number_input("💰 Dinheiro em Caixa (R$)", value=valor_inicial_caixa, step=1.0)
+    val_diaria = c_f2.number_input("📅 Diária do Dia (R$)", value=valor_inicial_diaria, step=5.0)
+    
+    # Só grava Caixa e Diária na planilha quando clicar no botão abaixo
     if st.button("Salvar Caixa e Diária", use_container_width=True):
-        agora = datetime.now().strftime("%d/%m/%Y %H:%M")
-        df_lanc.loc[idx_caixa, ["dinheiro", "usuario", "data_hora"]] = [val_caixa, usuario_atual, agora]
-        df_lanc.loc[idx_diaria, ["dinheiro", "usuario", "data_hora"]] = [-abs(val_diaria), usuario_atual, agora]
-        salvar_aba("lancamentos", df_lanc)
-        st.success("Salvo com sucesso!")
+        with st.spinner("Salvando Caixa e Diária..."):
+            df_atual = ler_aba("lancamentos")
+            if not df_atual.empty:
+                df_atual["usuario"] = df_atual["usuario"].astype(str).str.strip()
+            agora = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+            idx_c = df_atual[(df_atual["data_ref"] == data_str) & (df_atual["tipo"] == "CAIXA") & (df_atual["usuario"] == usuario_atual)].index if not df_atual.empty else []
+            idx_d = df_atual[(df_atual["data_ref"] == data_str) & (df_atual["tipo"] == "DIARIA") & (df_atual["usuario"] == usuario_atual)].index if not df_atual.empty else []
+
+            if len(idx_c) > 0:
+                df_atual.loc[idx_c, ["dinheiro", "usuario", "data_hora"]] = [val_caixa, usuario_atual, agora]
+            else:
+                novo_id = 1 if df_atual.empty else int(df_atual["id"].max()) + 1
+                nova_c = pd.DataFrame([{"id": novo_id, "data_ref": data_str, "tipo": "CAIXA", "qtd": 0, "local": "Caixa", "dinheiro": val_caixa, "pix_bradesco": 0.0, "pix_stones": 0.0, "cartao": 0.0, "gorjetas": 0.0, "despesas": 0.0, "obs": "", "extras": "{}", "usuario": usuario_atual, "data_hora": agora}])
+                df_atual = pd.concat([df_atual, nova_c], ignore_index=True)
+
+            if len(idx_d) > 0:
+                df_atual.loc[idx_d, ["dinheiro", "usuario", "data_hora"]] = [-abs(val_diaria), usuario_atual, agora]
+            else:
+                novo_id = 1 if df_atual.empty else int(df_atual["id"].max()) + 1
+                nova_d = pd.DataFrame([{"id": novo_id, "data_ref": data_str, "tipo": "DIARIA", "qtd": 0, "local": "Diária", "dinheiro": -abs(val_diaria), "pix_bradesco": 0.0, "pix_stones": 0.0, "cartao": 0.0, "gorjetas": 0.0, "despesas": 0.0, "obs": "", "extras": "{}", "usuario": usuario_atual, "data_hora": agora}])
+                df_atual = pd.concat([df_atual, nova_d], ignore_index=True)
+
+            salvar_aba("lancamentos", df_atual)
+        st.success("Caixa e Diária salvos com sucesso!")
         st.rerun()
 
     st.divider()
 
     # Numeração da corrida baseada no usuário que está lançando
-    df_c_dia_user = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CORRIDA") & (df_lanc["usuario"] == usuario_atual)]
+    df_c_dia_user = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CORRIDA") & (df_lanc["usuario"] == usuario_atual)] if not df_lanc.empty else pd.DataFrame()
     proxima_corrida = len(df_c_dia_user) + 1
 
     st.subheader(f"2. Nova Corrida ou Despesa (Corrida Nº {proxima_corrida} de {usuario_atual})")
@@ -123,6 +136,7 @@ if opcao == "Lançamentos do Dia":
         for col_n in lista_extras:
             extras_dict[col_n] = st.number_input(f"{col_n} (R$)", min_value=0.0, step=1.0)
 
+        # Gravação ocorre SOMENTE ao clicar neste botão
         enviado = st.form_submit_button("➕ Adicionar Registro", use_container_width=True)
         if enviado:
             if not local or not local.strip():
@@ -130,8 +144,11 @@ if opcao == "Lançamentos do Dia":
             else:
                 with st.spinner("Salvando na planilha..."):
                     df_atual = ler_aba("lancamentos")
-                    df_atual["usuario"] = df_atual["usuario"].astype(str).str.strip()
-                    df_atual_dia = df_atual[(df_atual["data_ref"] == data_str) & (df_atual["tipo"] == "CORRIDA") & (df_atual["usuario"] == usuario_atual)]
+                    if not df_atual.empty:
+                        df_atual["usuario"] = df_atual["usuario"].astype(str).str.strip()
+                        df_atual_dia = df_atual[(df_atual["data_ref"] == data_str) & (df_atual["tipo"] == "CORRIDA") & (df_atual["usuario"] == usuario_atual)]
+                    else:
+                        df_atual_dia = pd.DataFrame()
                     
                     num_corrida_atual = len(df_atual_dia) + 1
                     agora = datetime.now().strftime("%d/%m/%Y %H:%M")
@@ -152,11 +169,14 @@ if opcao == "Lançamentos do Dia":
     titulo_reg = f"3. Registros do Dia ({usuario_filtro_dia})" if eh_admin else "3. Registros do Dia"
     st.subheader(titulo_reg)
 
-    if eh_admin and usuario_filtro_dia == "Todos os Usuários":
-        df_c = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CORRIDA")].copy()
+    if not df_lanc.empty:
+        if eh_admin and usuario_filtro_dia == "Todos os Usuários":
+            df_c = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CORRIDA")].copy()
+        else:
+            alvo_user = usuario_filtro_dia if eh_admin else usuario_atual
+            df_c = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CORRIDA") & (df_lanc["usuario"] == alvo_user)].copy()
     else:
-        alvo_user = usuario_filtro_dia if eh_admin else usuario_atual
-        df_c = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CORRIDA") & (df_lanc["usuario"] == alvo_user)].copy()
+        df_c = pd.DataFrame()
 
     if not df_c.empty:
         df_c = df_c.sort_values("id").reset_index(drop=True)
@@ -209,15 +229,19 @@ if opcao == "Lançamentos do Dia":
     titulo_res = f"📊 Resumo do Dia ({usuario_filtro_dia})" if eh_admin else "📊 Resumo do Dia"
     st.subheader(titulo_res)
 
-    if eh_admin and usuario_filtro_dia == "Todos os Usuários":
-        res_caixa = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CAIXA")]["dinheiro"].sum()
-        res_diaria = abs(df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "DIARIA")]["dinheiro"].sum())
-    elif eh_admin:
-        res_caixa = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CAIXA") & (df_lanc["usuario"] == usuario_filtro_dia)]["dinheiro"].sum()
-        res_diaria = abs(df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "DIARIA") & (df_lanc["usuario"] == usuario_filtro_dia)]["dinheiro"].sum())
+    if not df_lanc.empty:
+        if eh_admin and usuario_filtro_dia == "Todos os Usuários":
+            res_caixa = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CAIXA")]["dinheiro"].sum()
+            res_diaria = abs(df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "DIARIA")]["dinheiro"].sum())
+        elif eh_admin:
+            res_caixa = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CAIXA") & (df_lanc["usuario"] == usuario_filtro_dia)]["dinheiro"].sum()
+            res_diaria = abs(df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "DIARIA") & (df_lanc["usuario"] == usuario_filtro_dia)]["dinheiro"].sum())
+        else:
+            res_caixa = val_caixa
+            res_diaria = val_diaria
     else:
-        res_caixa = val_caixa
-        res_diaria = val_diaria
+        res_caixa = val_caixa if not eh_admin else 0.0
+        res_diaria = val_diaria if not eh_admin else 0.0
 
     total_corridas_feitas = len(df_c)
     t_din = df_c["dinheiro"].sum() if not df_c.empty else 0.0
@@ -296,7 +320,6 @@ elif opcao == "Relatórios e Gráficos":
             )
             st.plotly_chart(fig_bar, use_container_width=True)
 
-            # Gráfico comparativo por motorista quando o admin visualiza todos
             if eh_admin and filtro_rel_user == "Todos os Usuários":
                 df_comp = df_c.groupby("usuario")[["Faturamento", "despesas"]].sum().reset_index()
                 df_comp = df_comp.rename(columns={"usuario": "Motorista", "despesas": "Despesas"})
