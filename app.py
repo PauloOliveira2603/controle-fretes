@@ -34,6 +34,9 @@ if "logado" not in st.session_state:
     st.session_state.nome = ""
     st.session_state.perfil = ""
 
+if "form_seq" not in st.session_state:
+    st.session_state.form_seq = 0
+
 if not st.session_state.logado:
     st.title("🚚 Acesso ao Sistema")
     user = st.text_input("Usuário")
@@ -138,7 +141,6 @@ if opcao == "Lançamentos do Dia":
     df_c_dia_user = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CORRIDA") & (df_lanc["usuario"] == usuario_atual)] if not df_lanc.empty else pd.DataFrame()
     proxima_corrida = len(df_c_dia_user) + 1
 
-    # Lista simplificada de tipos de lançamento (formas de pagamento + despesa + colunas extras)
     opcoes_tipo_lanc = [
         "Dinheiro",
         "PIX Bradesco",
@@ -148,61 +150,88 @@ if opcao == "Lançamentos do Dia":
     ] + lista_extras
 
     st.subheader(f"2. Nova Corrida ou Despesa (Corrida Nº {proxima_corrida} de {usuario_atual})")
-    with st.form("novo_reg", clear_on_submit=True):
-        st.info(f"🔢 **Corrida automática do dia:** Nº {proxima_corrida}")
-        local = st.text_input("Local / Descrição (Ex: Piriquito, Gasolina)")
-        
-        c_v1, c_v2, c_v3 = st.columns([2, 1.5, 1.5])
-        tipo_pagamento = c_v1.selectbox("Forma de Pagamento / Tipo", opcoes_tipo_lanc)
-        valor_txt = c_v2.text_input("Valor (R$)", placeholder="0,00")
-        gorjetas_txt = c_v3.text_input("Gorjeta (R$)", placeholder="0,00")
-        
-        obs = st.text_input("Observação")
+    st.info(f"🔢 **Corrida automática do dia:** Nº {proxima_corrida}")
 
-        enviado = st.form_submit_button("➕ Adicionar Registro", use_container_width=True)
-        if enviado:
-            valor = converter_moeda(valor_txt)
-            gorjetas = converter_moeda(gorjetas_txt)
+    seq = st.session_state.form_seq
+    local = st.text_input("Local / Descrição (Ex: Piriquito, Gasolina)", key=f"in_local_{seq}")
 
-            if not local or not local.strip():
-                st.warning("Preencha o campo Local / Descrição antes de adicionar.")
-            elif valor is None or gorjetas is None:
-                st.error("Verifique os valores digitados. Use apenas números e vírgula ou ponto (Ex: 25,50).")
-            elif valor == 0.0 and gorjetas == 0.0:
-                st.warning("Informe um Valor ou uma Gorjeta antes de adicionar.")
-            else:
-                # Distribui o valor na coluna correspondente da planilha
-                dinheiro = valor if tipo_pagamento == "Dinheiro" else 0.0
-                pix_brad = valor if tipo_pagamento == "PIX Bradesco" else 0.0
-                pix_ston = valor if tipo_pagamento == "PIX Stones" else 0.0
-                cartao = valor if tipo_pagamento == "Cartão" else 0.0
-                despesas = valor if tipo_pagamento == "Despesas (Gasolina/Manut.)" else 0.0
+    c_v1, c_v2, c_v3 = st.columns([2, 1.5, 1.5])
+    tipo_pagamento = c_v1.selectbox("Forma de Pagamento / Tipo", opcoes_tipo_lanc, key=f"in_tipo_{seq}")
+    valor_txt = c_v2.text_input("Valor (R$)", placeholder="0,00", key=f"in_valor_{seq}")
+    gorjetas_txt = c_v3.text_input("Gorjeta (R$)", placeholder="0,00", key=f"in_gorjeta_{seq}")
 
-                extras_dict = {}
-                for col_n in lista_extras:
-                    extras_dict[col_n] = valor if tipo_pagamento == col_n else 0.0
+    # Pagamento misto (parte em uma forma + parte em outra na mesma corrida)
+    pag_misto = st.checkbox("🔀 Pagamento dividido (Ex: parte em Dinheiro + parte em PIX)", key=f"in_misto_{seq}")
+    if pag_misto:
+        c_m1, c_m2 = st.columns([2, 3])
+        tipo_pagamento_2 = c_m1.selectbox("2ª Forma de Pagamento / Tipo", opcoes_tipo_lanc, index=1, key=f"in_tipo2_{seq}")
+        valor2_txt = c_m2.text_input("2º Valor (R$)", placeholder="0,00", key=f"in_valor2_{seq}")
+    else:
+        tipo_pagamento_2 = None
+        valor2_txt = ""
 
-                with st.spinner("Salvando na planilha..."):
-                    df_atual = ler_aba("lancamentos")
-                    if not df_atual.empty:
-                        df_atual["usuario"] = df_atual["usuario"].astype(str).str.strip()
-                        df_atual_dia = df_atual[(df_atual["data_ref"] == data_str) & (df_atual["tipo"] == "CORRIDA") & (df_atual["usuario"] == usuario_atual)]
-                    else:
-                        df_atual_dia = pd.DataFrame()
-                    
-                    num_corrida_atual = len(df_atual_dia) + 1
-                    agora = datetime.now().strftime("%d/%m/%Y %H:%M")
-                    novo_id = 1 if df_atual.empty else int(df_atual["id"].max()) + 1
-                    nova_linha = pd.DataFrame([{
-                        "id": novo_id, "data_ref": data_str, "tipo": "CORRIDA", "qtd": num_corrida_atual, "local": local.strip(),
-                        "dinheiro": dinheiro, "pix_bradesco": pix_brad, "pix_stones": pix_ston, "cartao": cartao,
-                        "gorjetas": gorjetas, "despesas": despesas, "obs": obs.strip(), "extras": json.dumps(extras_dict),
-                        "usuario": usuario_atual, "data_hora": agora
-                    }])
-                    df_atual = pd.concat([df_atual, nova_linha], ignore_index=True)
-                    salvar_aba("lancamentos", df_atual)
-                st.success(f"Corrida Nº {num_corrida_atual} ({tipo_pagamento}) registrada com sucesso!")
-                st.rerun()
+    obs = st.text_input("Observação", key=f"in_obs_{seq}")
+
+    if st.button("➕ Adicionar Registro", type="primary", use_container_width=True):
+        valor1 = converter_moeda(valor_txt)
+        valor2 = converter_moeda(valor2_txt) if pag_misto else 0.0
+        gorjetas = converter_moeda(gorjetas_txt)
+
+        if not local or not local.strip():
+            st.warning("Preencha o campo Local / Descrição antes de adicionar.")
+        elif valor1 is None or valor2 is None or gorjetas is None:
+            st.error("Verifique os valores digitados. Use apenas números e vírgula ou ponto (Ex: 25,50).")
+        elif (valor1 + valor2) == 0.0 and gorjetas == 0.0:
+            st.warning("Informe um Valor ou uma Gorjeta antes de adicionar.")
+        elif pag_misto and tipo_pagamento == tipo_pagamento_2:
+            st.warning("Escolha formas de pagamento diferentes para o pagamento dividido.")
+        else:
+            # Soma os valores nas colunas correspondentes (suporta pagamento simples ou dividido)
+            valores_mapa = {
+                "Dinheiro": 0.0,
+                "PIX Bradesco": 0.0,
+                "PIX Stones": 0.0,
+                "Cartão": 0.0,
+                "Despesas (Gasolina/Manut.)": 0.0
+            }
+            for col_n in lista_extras:
+                valores_mapa[col_n] = 0.0
+
+            valores_mapa[tipo_pagamento] += valor1
+            if pag_misto and tipo_pagamento_2:
+                valores_mapa[tipo_pagamento_2] += valor2
+
+            dinheiro = valores_mapa["Dinheiro"]
+            pix_brad = valores_mapa["PIX Bradesco"]
+            pix_ston = valores_mapa["PIX Stones"]
+            cartao = valores_mapa["Cartão"]
+            despesas = valores_mapa["Despesas (Gasolina/Manut.)"]
+
+            extras_dict = {col_n: valores_mapa[col_n] for col_n in lista_extras}
+
+            with st.spinner("Salvando na planilha..."):
+                df_atual = ler_aba("lancamentos")
+                if not df_atual.empty:
+                    df_atual["usuario"] = df_atual["usuario"].astype(str).str.strip()
+                    df_atual_dia = df_atual[(df_atual["data_ref"] == data_str) & (df_atual["tipo"] == "CORRIDA") & (df_atual["usuario"] == usuario_atual)]
+                else:
+                    df_atual_dia = pd.DataFrame()
+                
+                num_corrida_atual = len(df_atual_dia) + 1
+                agora = datetime.now().strftime("%d/%m/%Y %H:%M")
+                novo_id = 1 if df_atual.empty else int(df_atual["id"].max()) + 1
+                nova_linha = pd.DataFrame([{
+                    "id": novo_id, "data_ref": data_str, "tipo": "CORRIDA", "qtd": num_corrida_atual, "local": local.strip(),
+                    "dinheiro": dinheiro, "pix_bradesco": pix_brad, "pix_stones": pix_ston, "cartao": cartao,
+                    "gorjetas": gorjetas, "despesas": despesas, "obs": obs.strip(), "extras": json.dumps(extras_dict),
+                    "usuario": usuario_atual, "data_hora": agora
+                }])
+                df_atual = pd.concat([df_atual, nova_linha], ignore_index=True)
+                salvar_aba("lancamentos", df_atual)
+
+            st.session_state.form_seq += 1
+            st.success(f"Corrida Nº {num_corrida_atual} registrada com sucesso!")
+            st.rerun()
 
     st.divider()
 
