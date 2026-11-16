@@ -31,16 +31,19 @@ if not st.session_state.logado:
         match = df_u[(df_u["username"] == user.strip()) & (df_u["senha"] == pwd.strip())]
         if not match.empty:
             st.session_state.logado = True
-            st.session_state.nome = match.iloc[0]["nome"]
-            st.session_state.perfil = match.iloc[0]["perfil"]
+            st.session_state.nome = str(match.iloc[0]["nome"]).strip()
+            st.session_state.perfil = str(match.iloc[0]["perfil"]).strip().lower()
             st.rerun()
         else:
             st.error("Usuário ou senha inválidos.")
     st.stop()
 
-st.sidebar.title(f"Olá, {st.session_state.nome}")
+eh_admin = (st.session_state.perfil == "admin")
+usuario_atual = st.session_state.nome
+
+st.sidebar.title(f"Olá, {usuario_atual}")
 menu = ["Lançamentos do Dia", "Relatórios e Gráficos"]
-if st.session_state.perfil == "admin":
+if eh_admin:
     menu.append("Administração")
 
 opcao = st.sidebar.radio("Menu", menu)
@@ -57,39 +60,54 @@ if opcao == "Lançamentos do Dia":
     df_cols = ler_aba("colunas_extras")
     lista_extras = df_cols["nome_coluna"].dropna().tolist() if not df_cols.empty else []
 
-    df_dia = df_lanc[df_lanc["data_ref"] == data_str] if not df_lanc.empty else pd.DataFrame()
-    if df_dia.empty or "CAIXA" not in df_dia["tipo"].values:
+    if not df_lanc.empty:
+        df_lanc["usuario"] = df_lanc["usuario"].astype(str).str.strip()
+
+    # Filtro de visualização na tela diária (Admin pode escolher todos ou um motorista)
+    usuario_filtro_dia = usuario_atual
+    if eh_admin:
+        df_u_lista = ler_aba("usuarios")
+        nomes_cadastrados = sorted(df_u_lista["nome"].dropna().astype(str).str.strip().unique().tolist()) if not df_u_lista.empty else []
+        if usuario_atual not in nomes_cadastrados:
+            nomes_cadastrados.insert(0, usuario_atual)
+        opcoes_filtro = ["Todos os Usuários"] + nomes_cadastrados
+        usuario_filtro_dia = st.selectbox("👤 Visualizar dados de:", opcoes_filtro)
+
+    # Cria Caixa e Diária individuais para o usuário logado no dia, caso não existam
+    df_dia_user = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["usuario"] == usuario_atual)] if not df_lanc.empty else pd.DataFrame()
+    if df_dia_user.empty or "CAIXA" not in df_dia_user["tipo"].values:
         agora = datetime.now().strftime("%d/%m/%Y %H:%M")
         novo_id = 1 if df_lanc.empty else int(df_lanc["id"].max()) + 1
         fixos = pd.DataFrame([
-            {"id": novo_id, "data_ref": data_str, "tipo": "CAIXA", "qtd": 0, "local": "Caixa", "dinheiro": 0.0, "pix_bradesco": 0.0, "pix_stones": 0.0, "cartao": 0.0, "gorjetas": 0.0, "despesas": 0.0, "obs": "", "extras": "{}", "usuario": "Sistema", "data_hora": agora},
-            {"id": novo_id + 1, "data_ref": data_str, "tipo": "DIARIA", "qtd": 0, "local": "Diária", "dinheiro": 0.0, "pix_bradesco": 0.0, "pix_stones": 0.0, "cartao": 0.0, "gorjetas": 0.0, "despesas": 0.0, "obs": "", "extras": "{}", "usuario": "Sistema", "data_hora": agora}
+            {"id": novo_id, "data_ref": data_str, "tipo": "CAIXA", "qtd": 0, "local": "Caixa", "dinheiro": 0.0, "pix_bradesco": 0.0, "pix_stones": 0.0, "cartao": 0.0, "gorjetas": 0.0, "despesas": 0.0, "obs": "", "extras": "{}", "usuario": usuario_atual, "data_hora": agora},
+            {"id": novo_id + 1, "data_ref": data_str, "tipo": "DIARIA", "qtd": 0, "local": "Diária", "dinheiro": 0.0, "pix_bradesco": 0.0, "pix_stones": 0.0, "cartao": 0.0, "gorjetas": 0.0, "despesas": 0.0, "obs": "", "extras": "{}", "usuario": usuario_atual, "data_hora": agora}
         ])
         df_lanc = pd.concat([df_lanc, fixos], ignore_index=True)
         salvar_aba("lancamentos", df_lanc)
         st.rerun()
 
-    idx_caixa = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CAIXA")].index
-    idx_diaria = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "DIARIA")].index
+    idx_caixa = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CAIXA") & (df_lanc["usuario"] == usuario_atual)].index
+    idx_diaria = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "DIARIA") & (df_lanc["usuario"] == usuario_atual)].index
 
-    st.subheader("1. Caixa e Diária")
+    st.subheader(f"1. Caixa e Diária ({usuario_atual})")
     c_f1, c_f2 = st.columns(2)
     val_caixa = c_f1.number_input("💰 Dinheiro em Caixa (R$)", value=float(df_lanc.loc[idx_caixa, "dinheiro"].iloc[0]), step=1.0)
     val_diaria = c_f2.number_input("📅 Diária do Dia (R$)", value=abs(float(df_lanc.loc[idx_diaria, "dinheiro"].iloc[0])), step=5.0)
     if st.button("Salvar Caixa e Diária", use_container_width=True):
         agora = datetime.now().strftime("%d/%m/%Y %H:%M")
-        df_lanc.loc[idx_caixa, ["dinheiro", "usuario", "data_hora"]] = [val_caixa, st.session_state.nome, agora]
-        df_lanc.loc[idx_diaria, ["dinheiro", "usuario", "data_hora"]] = [-abs(val_diaria), st.session_state.nome, agora]
+        df_lanc.loc[idx_caixa, ["dinheiro", "usuario", "data_hora"]] = [val_caixa, usuario_atual, agora]
+        df_lanc.loc[idx_diaria, ["dinheiro", "usuario", "data_hora"]] = [-abs(val_diaria), usuario_atual, agora]
         salvar_aba("lancamentos", df_lanc)
         st.success("Salvo com sucesso!")
         st.rerun()
 
     st.divider()
 
-    df_c_dia = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CORRIDA")]
-    proxima_corrida = len(df_c_dia) + 1
+    # Numeração da corrida baseada no usuário que está lançando
+    df_c_dia_user = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CORRIDA") & (df_lanc["usuario"] == usuario_atual)]
+    proxima_corrida = len(df_c_dia_user) + 1
 
-    st.subheader(f"2. Nova Corrida ou Despesa (Corrida Nº {proxima_corrida} do dia)")
+    st.subheader(f"2. Nova Corrida ou Despesa (Corrida Nº {proxima_corrida} de {usuario_atual})")
     with st.form("novo_reg", clear_on_submit=True):
         st.info(f"🔢 **Corrida automática do dia:** Nº {proxima_corrida}")
         local = st.text_input("Local / Descrição (Ex: Piriquito, Gasolina)")
@@ -112,7 +130,9 @@ if opcao == "Lançamentos do Dia":
             else:
                 with st.spinner("Salvando na planilha..."):
                     df_atual = ler_aba("lancamentos")
-                    df_atual_dia = df_atual[(df_atual["data_ref"] == data_str) & (df_atual["tipo"] == "CORRIDA")]
+                    df_atual["usuario"] = df_atual["usuario"].astype(str).str.strip()
+                    df_atual_dia = df_atual[(df_atual["data_ref"] == data_str) & (df_atual["tipo"] == "CORRIDA") & (df_atual["usuario"] == usuario_atual)]
+                    
                     num_corrida_atual = len(df_atual_dia) + 1
                     agora = datetime.now().strftime("%d/%m/%Y %H:%M")
                     novo_id = 1 if df_atual.empty else int(df_atual["id"].max()) + 1
@@ -120,7 +140,7 @@ if opcao == "Lançamentos do Dia":
                         "id": novo_id, "data_ref": data_str, "tipo": "CORRIDA", "qtd": num_corrida_atual, "local": local.strip(),
                         "dinheiro": dinheiro, "pix_bradesco": pix_brad, "pix_stones": pix_ston, "cartao": cartao,
                         "gorjetas": gorjetas, "despesas": despesas, "obs": obs.strip(), "extras": json.dumps(extras_dict),
-                        "usuario": st.session_state.nome, "data_hora": agora
+                        "usuario": usuario_atual, "data_hora": agora
                     }])
                     df_atual = pd.concat([df_atual, nova_linha], ignore_index=True)
                     salvar_aba("lancamentos", df_atual)
@@ -129,11 +149,19 @@ if opcao == "Lançamentos do Dia":
 
     st.divider()
 
-    st.subheader("3. Registros do Dia")
-    df_c = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CORRIDA")].copy()
+    titulo_reg = f"3. Registros do Dia ({usuario_filtro_dia})" if eh_admin else "3. Registros do Dia"
+    st.subheader(titulo_reg)
+
+    if eh_admin and usuario_filtro_dia == "Todos os Usuários":
+        df_c = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CORRIDA")].copy()
+    else:
+        alvo_user = usuario_filtro_dia if eh_admin else usuario_atual
+        df_c = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CORRIDA") & (df_lanc["usuario"] == alvo_user)].copy()
+
     if not df_c.empty:
         df_c = df_c.sort_values("id").reset_index(drop=True)
-        df_c["qtd"] = range(1, len(df_c) + 1)
+        if not (eh_admin and usuario_filtro_dia == "Todos os Usuários"):
+            df_c["qtd"] = range(1, len(df_c) + 1)
 
         for col_n in lista_extras:
             df_c[col_n] = df_c["extras"].apply(lambda x: json.loads(str(x)).get(col_n, 0.0) if pd.notna(x) and str(x).startswith("{") else 0.0)
@@ -160,23 +188,37 @@ if opcao == "Lançamentos do Dia":
 
             if st.button("💾 Salvar Alteração", use_container_width=True):
                 agora = datetime.now().strftime("%d/%m/%Y %H:%M")
+                dono_original = df_lanc.loc[idx_e, "usuario"].iloc[0]
                 df_lanc.loc[idx_e, ["local", "dinheiro", "pix_bradesco", "pix_stones", "cartao", "gorjetas", "despesas", "obs", "usuario", "data_hora"]] = [
-                    ed_loc, ed_din, ed_brad, ed_ston, ed_cart, ed_gorj, ed_desp, ed_obs, st.session_state.nome, agora
+                    ed_loc, ed_din, ed_brad, ed_ston, ed_cart, ed_gorj, ed_desp, ed_obs, dono_original, agora
                 ]
                 salvar_aba("lancamentos", df_lanc)
                 st.success("Alterado!")
                 st.rerun()
 
             if st.button("🗑️ Excluir Registro", use_container_width=True):
+                dono_excluido = df_lanc.loc[idx_e, "usuario"].iloc[0]
                 df_lanc = df_lanc.drop(idx_e)
-                mask_dia_corr = (df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CORRIDA")
+                mask_dia_corr = (df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CORRIDA") & (df_lanc["usuario"] == dono_excluido)
                 df_lanc.loc[mask_dia_corr, "qtd"] = range(1, mask_dia_corr.sum() + 1)
                 salvar_aba("lancamentos", df_lanc)
                 st.warning("Excluído e numeração do dia reorganizada!")
                 st.rerun()
 
     st.divider()
-    st.subheader("📊 Resumo do Dia")
+    titulo_res = f"📊 Resumo do Dia ({usuario_filtro_dia})" if eh_admin else "📊 Resumo do Dia"
+    st.subheader(titulo_res)
+
+    if eh_admin and usuario_filtro_dia == "Todos os Usuários":
+        res_caixa = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CAIXA")]["dinheiro"].sum()
+        res_diaria = abs(df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "DIARIA")]["dinheiro"].sum())
+    elif eh_admin:
+        res_caixa = df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CAIXA") & (df_lanc["usuario"] == usuario_filtro_dia)]["dinheiro"].sum()
+        res_diaria = abs(df_lanc[(df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "DIARIA") & (df_lanc["usuario"] == usuario_filtro_dia)]["dinheiro"].sum())
+    else:
+        res_caixa = val_caixa
+        res_diaria = val_diaria
+
     total_corridas_feitas = len(df_c)
     t_din = df_c["dinheiro"].sum() if not df_c.empty else 0.0
     t_pix_c = (df_c["pix_bradesco"].sum() + df_c["pix_stones"].sum() + df_c["cartao"].sum()) if not df_c.empty else 0.0
@@ -188,19 +230,34 @@ if opcao == "Lançamentos do Dia":
     st.metric("1. Total de Dinheiro (no dia)", f"R$ {t_din:.2f}")
     st.metric("2. Total PIX + Cartão", f"R$ {t_pix_c:.2f}")
     st.metric("3. Total Corridas (Dinheiro + PIX + Cartão)", f"R$ {t_corr:.2f}")
-    st.metric("4. Total Corridas - Diária", f"R$ {(t_corr - val_diaria):.2f}")
-    st.metric("5. Total Caixa + Dinheiro - Diária", f"R$ {(val_caixa + t_din - val_diaria):.2f}")
-    st.metric("6. Total Dinheiro - Diária (Acerto Espécie)", f"R$ {(t_din - val_diaria):.2f}")
+    st.metric("4. Total Corridas - Diária", f"R$ {(t_corr - res_diaria):.2f}")
+    st.metric("5. Total Caixa + Dinheiro - Diária", f"R$ {(res_caixa + t_din - res_diaria):.2f}")
+    st.metric("6. Total Dinheiro - Diária (Acerto Espécie)", f"R$ {(t_din - res_diaria):.2f}")
     st.info(f"**Total Despesas:** R$ {t_desp:.2f} | **Gorjetas:** R$ {t_gorj:.2f}")
-    st.success(f"**Lucro Líquido Real (Corridas + Gorjetas - Diária - Despesas): R$ {(t_corr + t_gorj - val_diaria - t_desp):.2f}**")
+    st.success(f"**Lucro Líquido Real (Corridas + Gorjetas - Diária - Despesas): R$ {(t_corr + t_gorj - res_diaria - t_desp):.2f}**")
 
 elif opcao == "Relatórios e Gráficos":
     st.header("📈 Relatórios por Período")
-    dt_ini = st.date_input("Data Inicial", value=date.today().replace(day=1))
-    dt_fim = st.date_input("Data Final", value=date.today())
+    c_dt1, c_dt2 = st.columns(2)
+    dt_ini = c_dt1.date_input("Data Inicial", value=date.today().replace(day=1))
+    dt_fim = c_dt2.date_input("Data Final", value=date.today())
 
     df_lanc = ler_aba("lancamentos")
     if not df_lanc.empty:
+        df_lanc["usuario"] = df_lanc["usuario"].astype(str).str.strip()
+        
+        if eh_admin:
+            df_u_lista = ler_aba("usuarios")
+            nomes_cadastrados = sorted(df_u_lista["nome"].dropna().astype(str).str.strip().unique().tolist()) if not df_u_lista.empty else []
+            usuarios_nos_dados = sorted(df_lanc["usuario"].dropna().unique().tolist())
+            todos_nomes = sorted(list(set(nomes_cadastrados + usuarios_nos_dados)))
+            opcoes_rel = ["Todos os Usuários"] + todos_nomes
+            filtro_rel_user = st.selectbox("👤 Filtrar Relatório por Usuário:", opcoes_rel)
+            if filtro_rel_user != "Todos os Usuários":
+                df_lanc = df_lanc[df_lanc["usuario"] == filtro_rel_user]
+        else:
+            df_lanc = df_lanc[df_lanc["usuario"] == usuario_atual]
+
         mask = (df_lanc["data_ref"] >= dt_ini.strftime("%Y-%m-%d")) & (df_lanc["data_ref"] <= dt_fim.strftime("%Y-%m-%d"))
         df_p = df_lanc[mask]
         df_c = df_p[df_p["tipo"] == "CORRIDA"].copy()
@@ -239,10 +296,20 @@ elif opcao == "Relatórios e Gráficos":
             )
             st.plotly_chart(fig_bar, use_container_width=True)
 
+            # Gráfico comparativo por motorista quando o admin visualiza todos
+            if eh_admin and filtro_rel_user == "Todos os Usuários":
+                df_comp = df_c.groupby("usuario")[["Faturamento", "despesas"]].sum().reset_index()
+                df_comp = df_comp.rename(columns={"usuario": "Motorista", "despesas": "Despesas"})
+                fig_comp = px.bar(
+                    df_comp, x="Motorista", y=["Faturamento", "Despesas"], barmode="group",
+                    title="Comparativo por Usuário: Faturamento x Despesas", labels={"value": "Valor (R$)", "variable": "Categoria"}
+                )
+                st.plotly_chart(fig_comp, use_container_width=True)
+
         csv = df_p.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig")
         st.download_button("📥 Baixar Relatório Completo (CSV/Excel)", data=csv, file_name=f"relatorio_{dt_ini}_{dt_fim}.csv", mime="text/csv", use_container_width=True)
 
-elif opcao == "Administração":
+elif opcao == "Administração" and eh_admin:
     st.header("⚙️ Administração")
     st.subheader("Cadastrar Novo Usuário")
     with st.form("f_user", clear_on_submit=True):
