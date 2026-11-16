@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, date
+from zoneinfo import ZoneInfo
 import plotly.express as px
 import json
 from streamlit_gsheets import GSheetsConnection
@@ -8,6 +9,14 @@ from streamlit_gsheets import GSheetsConnection
 st.set_page_config(page_title="Controle de Fretes", layout="wide")
 
 conn = st.connection("gsheets", type=GSheetsConnection)
+
+FUSO_BR = ZoneInfo("America/Sao_Paulo")
+
+def agora_br_str():
+    return datetime.now(FUSO_BR).strftime("%d/%m/%Y %H:%M")
+
+def hoje_br():
+    return datetime.now(FUSO_BR).date()
 
 COLS_NUMERICAS = ["dinheiro", "pix_bradesco", "pix_stones", "cartao", "gorjetas", "despesas"]
 COLS_TEXTO = ["data_ref", "tipo", "local", "obs", "extras", "usuario", "data_hora"]
@@ -97,7 +106,7 @@ if st.sidebar.button("Sair"):
 
 if opcao == "Lançamentos do Dia":
     st.header("📋 Controle Diário")
-    data_sel = st.date_input("Data", value=date.today())
+    data_sel = st.date_input("Data", value=hoje_br())
     data_str = data_sel.strftime("%Y-%m-%d")
 
     df_lanc = ler_aba("lancamentos")
@@ -135,7 +144,7 @@ if opcao == "Lançamentos do Dia":
         else:
             with st.spinner("Salvando Caixa e Diária..."):
                 df_atual = ler_aba("lancamentos")
-                agora = datetime.now().strftime("%d/%m/%Y %H:%M")
+                agora = agora_br_str()
 
                 idx_c = df_atual[(df_atual["data_ref"] == data_str) & (df_atual["tipo"] == "CAIXA") & (df_atual["usuario"] == usuario_atual)].index if not df_atual.empty else []
                 idx_d = df_atual[(df_atual["data_ref"] == data_str) & (df_atual["tipo"] == "DIARIA") & (df_atual["usuario"] == usuario_atual)].index if not df_atual.empty else []
@@ -242,7 +251,7 @@ if opcao == "Lançamentos do Dia":
                     df_atual_dia = pd.DataFrame()
                 
                 num_corrida_atual = len(df_atual_dia) + 1
-                agora = datetime.now().strftime("%d/%m/%Y %H:%M")
+                agora = agora_br_str()
                 novo_id = 1 if df_atual.empty else int(df_atual["id"].max()) + 1
                 nova_linha = pd.DataFrame([{
                     "id": int(novo_id),
@@ -321,10 +330,9 @@ if opcao == "Lançamentos do Dia":
                 if None in [ed_din, ed_brad, ed_ston, ed_cart, ed_gorj, ed_desp]:
                     st.error("Verifique os valores digitados na edição. Use apenas números e vírgula ou ponto.")
                 else:
-                    agora = datetime.now().strftime("%d/%m/%Y %H:%M")
+                    agora = agora_br_str()
                     dono_original = str(df_lanc.loc[idx_e, "usuario"].iloc[0])
                     
-                    # Atualiza coluna por coluna com tipagem explícita para evitar LossySetitemError
                     df_lanc.loc[idx_e, "local"] = str(ed_loc).strip()
                     df_lanc.loc[idx_e, "dinheiro"] = float(ed_din)
                     df_lanc.loc[idx_e, "pix_bradesco"] = float(ed_brad)
@@ -387,8 +395,9 @@ if opcao == "Lançamentos do Dia":
 elif opcao == "Relatórios e Gráficos":
     st.header("📈 Relatórios por Período")
     c_dt1, c_dt2 = st.columns(2)
-    dt_ini = c_dt1.date_input("Data Inicial", value=date.today().replace(day=1))
-    dt_fim = c_dt2.date_input("Data Final", value=date.today())
+    hoje_atual = hoje_br()
+    dt_ini = c_dt1.date_input("Data Inicial", value=hoje_atual.replace(day=1))
+    dt_fim = c_dt2.date_input("Data Final", value=hoje_atual)
 
     df_lanc = ler_aba("lancamentos")
     if not df_lanc.empty:
@@ -421,28 +430,41 @@ elif opcao == "Relatórios e Gráficos":
         st.metric("Faturamento Corridas", f"R$ {tot_corr:.2f}")
         st.metric("Total Dinheiro", f"R$ {tot_din:.2f}")
         st.metric("Total PIX + Cartão", f"R$ {tot_pix_c:.2f}")
+        st.metric("Total Gorjetas", f"R$ {tot_gorj:.2f}")
         st.metric("Total Diárias", f"R$ {tot_diar:.2f}")
         st.metric("Total Despesas", f"R$ {tot_desp:.2f}")
         st.success(f"**Saldo Líquido do Período: R$ {(tot_corr + tot_gorj - tot_diar - tot_desp):.2f}**")
 
         if not df_c.empty:
+            val_din_pie = df_c["dinheiro"].sum()
+            val_brad_pie = df_c["pix_bradesco"].sum()
+            val_ston_pie = df_c["pix_stones"].sum()
+            val_cart_pie = df_c["cartao"].sum()
+            val_gorj_pie = df_c["gorjetas"].sum()
+            soma_geral_pie = val_din_pie + val_brad_pie + val_ston_pie + val_cart_pie + val_gorj_pie
+
             fig_pie = px.pie(
-                names=["Dinheiro", "PIX Bradesco", "PIX Stones", "Cartão"],
-                values=[df_c["dinheiro"].sum(), df_c["pix_bradesco"].sum(), df_c["pix_stones"].sum(), df_c["cartao"].sum()],
-                title="Entradas por Forma de Pagamento"
+                names=["Dinheiro", "PIX Bradesco", "PIX Stones", "Cartão", "Gorjetas"],
+                values=[val_din_pie, val_brad_pie, val_ston_pie, val_cart_pie, val_gorj_pie],
+                title=f"Entradas por Forma de Pagamento + Gorjetas (Total Geral: R$ {soma_geral_pie:,.2f})",
+                hole=0.38
             )
             fig_pie.update_traces(
                 texttemplate="<b>%{label}</b><br>R$ %{value:,.2f}<br>(%{percent})",
                 textposition="inside"
             )
+            fig_pie.add_annotation(
+                text=f"<b>Total Geral</b><br>R$ {soma_geral_pie:,.2f}",
+                x=0.5, y=0.5, font_size=14, showarrow=False
+            )
             st.plotly_chart(fig_pie, use_container_width=True)
 
-            df_c["Faturamento"] = df_c["dinheiro"] + df_c["pix_bradesco"] + df_c["pix_stones"] + df_c["cartao"]
+            df_c["Faturamento"] = df_c["dinheiro"] + df_c["pix_bradesco"] + df_c["pix_stones"] + df_c["cartao"] + df_c["gorjetas"]
             df_agrup = df_c.groupby("data_ref")[["Faturamento", "despesas"]].sum().reset_index()
             df_agrup = df_agrup.rename(columns={"despesas": "Despesas", "data_ref": "Data"})
             fig_bar = px.bar(
                 df_agrup, x="Data", y=["Faturamento", "Despesas"], barmode="group",
-                title="Evolução Diária: Faturamento x Despesas", labels={"value": "Valor (R$)", "variable": "Categoria"},
+                title="Evolução Diária: Entradas (com Gorjetas) x Despesas", labels={"value": "Valor (R$)", "variable": "Categoria"},
                 text_auto=True
             )
             fig_bar.update_traces(texttemplate="R$ %{y:,.2f}", textposition="outside")
@@ -454,7 +476,7 @@ elif opcao == "Relatórios e Gráficos":
                 df_comp = df_comp.rename(columns={"usuario": "Motorista", "despesas": "Despesas"})
                 fig_comp = px.bar(
                     df_comp, x="Motorista", y=["Faturamento", "Despesas"], barmode="group",
-                    title="Comparativo por Usuário: Faturamento x Despesas", labels={"value": "Valor (R$)", "variable": "Categoria"},
+                    title="Comparativo por Usuário: Entradas (com Gorjetas) x Despesas", labels={"value": "Valor (R$)", "variable": "Categoria"},
                     text_auto=True
                 )
                 fig_comp.update_traces(texttemplate="R$ %{y:,.2f}", textposition="outside")
