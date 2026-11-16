@@ -4,6 +4,7 @@ from datetime import datetime, date
 from zoneinfo import ZoneInfo
 import plotly.express as px
 import json
+import time
 from streamlit_gsheets import GSheetsConnection
 from fpdf import FPDF
 
@@ -33,7 +34,6 @@ def normalizar_df_lancamentos(df):
         return pd.DataFrame(columns=ORDEM_COLUNAS_LANC)
     df = df.copy()
 
-    # Garante que as colunas de auditoria de alteração existam mesmo em planilhas antigas
     if "usuario_alteracao" not in df.columns:
         df["usuario_alteracao"] = df["usuario"] if "usuario" in df.columns else ""
     if "data_alteracao" not in df.columns:
@@ -47,7 +47,6 @@ def normalizar_df_lancamentos(df):
             df[col] = df[col].fillna("").astype(str)
             df[col] = df[col].replace({"nan": "", "None": "", "<NA>": ""})
 
-    # Preenche retroativamente registros antigos onde usuario_alteracao/data_alteracao estejam vazios
     mask_u_alt_vazio = df["usuario_alteracao"].str.strip() == ""
     df.loc[mask_u_alt_vazio, "usuario_alteracao"] = df.loc[mask_u_alt_vazio, "usuario"]
 
@@ -66,16 +65,34 @@ def normalizar_df_lancamentos(df):
     cols_finais = [c for c in ORDEM_COLUNAS_LANC if c in df.columns] + [c for c in df.columns if c not in ORDEM_COLUNAS_LANC]
     return df[cols_finais]
 
+@st.cache_data(ttl=60, show_spinner=False)
+def _ler_aba_cache(aba):
+    for tentativa in range(4):
+        try:
+            df = conn.read(worksheet=aba, ttl=0)
+            if aba == "lancamentos":
+                return normalizar_df_lancamentos(df)
+            return df
+        except Exception as e:
+            if tentativa == 3:
+                raise e
+            time.sleep(1.5 * (tentativa + 1))
+
 def ler_aba(aba):
-    df = conn.read(worksheet=aba, ttl=0)
-    if aba == "lancamentos":
-        return normalizar_df_lancamentos(df)
-    return df
+    return _ler_aba_cache(aba).copy()
 
 def salvar_aba(aba, df):
     if aba == "lancamentos":
         df = normalizar_df_lancamentos(df)
-    conn.update(worksheet=aba, data=df)
+    for tentativa in range(4):
+        try:
+            conn.update(worksheet=aba, data=df)
+            _ler_aba_cache.clear()
+            return
+        except Exception as e:
+            if tentativa == 3:
+                raise e
+            time.sleep(1.5 * (tentativa + 1))
 
 def converter_moeda(texto):
     if not texto or not str(texto).strip():
@@ -241,6 +258,9 @@ if eh_admin:
     menu.append("Administração")
 
 opcao = st.sidebar.radio("Menu", menu)
+if st.sidebar.button("🔄 Atualizar Planilha"):
+    _ler_aba_cache.clear()
+    st.rerun()
 if st.sidebar.button("Sair"):
     st.session_state.logado = False
     st.rerun()
@@ -285,13 +305,13 @@ if opcao == "Lançamentos do Dia":
             st.error("Digite valores numéricos válidos para Caixa e Diária (Ex: 50 ou 50,00).")
         else:
             with st.spinner("Salvando Caixa e Diária..."):
+                _ler_aba_cache.clear()
                 df_atual = ler_aba("lancamentos")
                 agora = agora_br_str()
 
                 idx_c = df_atual[(df_atual["data_ref"] == data_str) & (df_atual["tipo"] == "CAIXA") & (df_atual["usuario"] == usuario_atual)].index if not df_atual.empty else []
                 idx_d = df_atual[(df_atual["data_ref"] == data_str) & (df_atual["tipo"] == "DIARIA") & (df_atual["usuario"] == usuario_atual)].index if not df_atual.empty else []
 
-                # Na alteração, preserva usuario e data_hora originais e atualiza apenas usuario_alteracao e data_alteracao
                 if len(idx_c) > 0:
                     df_atual.loc[idx_c, "dinheiro"] = float(val_caixa)
                     df_atual.loc[idx_c, "usuario_alteracao"] = str(usuario_atual)
@@ -329,6 +349,7 @@ if opcao == "Lançamentos do Dia":
     tem_caixa_ou_diaria = (not caixa_existente.empty) or (not diaria_existente.empty)
     if c_btn2.button("🗑️ Excluir Caixa/Diária", use_container_width=True, disabled=not tem_caixa_ou_diaria):
         with st.spinner("Excluindo Caixa e Diária..."):
+            _ler_aba_cache.clear()
             df_atual = ler_aba("lancamentos")
             if not df_atual.empty:
                 mask_remover = (df_atual["data_ref"] == data_str) & (df_atual["usuario"] == usuario_atual) & (df_atual["tipo"].isin(["CAIXA", "DIARIA"]))
@@ -428,6 +449,7 @@ if opcao == "Lançamentos do Dia":
                 extras_dict["_origem_despesa"] = origem_despesa
 
             with st.spinner("Salvando na planilha..."):
+                _ler_aba_cache.clear()
                 df_atual = ler_aba("lancamentos")
                 if not df_atual.empty:
                     df_atual_dia = df_atual[(df_atual["data_ref"] == data_str) & (df_atual["tipo"] == "CORRIDA") & (df_atual["usuario"] == usuario_atual)]
@@ -438,7 +460,6 @@ if opcao == "Lançamentos do Dia":
                 agora = agora_br_str()
                 novo_id = 1 if df_atual.empty else int(df_atual["id"].max()) + 1
                 
-                # Na inclusão, usuario_alteracao e data_alteracao recebem exatamente os mesmos valores de usuario e data_hora
                 nova_linha = pd.DataFrame([{
                     "id": int(novo_id),
                     "data_ref": str(data_str),
@@ -533,41 +554,47 @@ if opcao == "Lançamentos do Dia":
                 if None in [ed_din, ed_brad, ed_ston, ed_cart, ed_gorj, ed_desp]:
                     st.error("Verifique os valores digitados na edição. Use apenas números e vírgula ou ponto.")
                 else:
-                    agora = agora_br_str()
-                    
-                    try:
-                        extras_atual = json.loads(str(df_lanc.loc[idx_e, "extras"].iloc[0]))
-                    except Exception:
-                        extras_atual = {}
-                    if float(ed_desp) > 0:
-                        extras_atual["_origem_despesa"] = ed_orig_desp
-                    else:
-                        extras_atual.pop("_origem_despesa", None)
+                    with st.spinner("Salvando alteração..."):
+                        _ler_aba_cache.clear()
+                        df_atual = ler_aba("lancamentos")
+                        idx_e_atual = df_atual[df_atual["id"] == id_edit].index
+                        agora = agora_br_str()
+                        
+                        try:
+                            extras_atual = json.loads(str(df_atual.loc[idx_e_atual, "extras"].iloc[0]))
+                        except Exception:
+                            extras_atual = {}
+                        if float(ed_desp) > 0:
+                            extras_atual["_origem_despesa"] = ed_orig_desp
+                        else:
+                            extras_atual.pop("_origem_despesa", None)
 
-                    df_lanc.loc[idx_e, "local"] = str(ed_loc).strip()
-                    df_lanc.loc[idx_e, "dinheiro"] = float(ed_din)
-                    df_lanc.loc[idx_e, "pix_bradesco"] = float(ed_brad)
-                    df_lanc.loc[idx_e, "pix_stones"] = float(ed_ston)
-                    df_lanc.loc[idx_e, "cartao"] = float(ed_cart)
-                    df_lanc.loc[idx_e, "gorjetas"] = float(ed_gorj)
-                    df_lanc.loc[idx_e, "despesas"] = float(ed_desp)
-                    df_lanc.loc[idx_e, "obs"] = str(ed_obs).strip()
-                    df_lanc.loc[idx_e, "extras"] = json.dumps(extras_atual, ensure_ascii=False)
-                    
-                    # Na alteração, usuario e data_hora permanecem intactos; apenas usuario_alteracao e data_alteracao são atualizados
-                    df_lanc.loc[idx_e, "usuario_alteracao"] = str(usuario_atual)
-                    df_lanc.loc[idx_e, "data_alteracao"] = str(agora)
-                    
-                    salvar_aba("lancamentos", df_lanc)
+                        df_atual.loc[idx_e_atual, "local"] = str(ed_loc).strip()
+                        df_atual.loc[idx_e_atual, "dinheiro"] = float(ed_din)
+                        df_atual.loc[idx_e_atual, "pix_bradesco"] = float(ed_brad)
+                        df_atual.loc[idx_e_atual, "pix_stones"] = float(ed_ston)
+                        df_atual.loc[idx_e_atual, "cartao"] = float(ed_cart)
+                        df_atual.loc[idx_e_atual, "gorjetas"] = float(ed_gorj)
+                        df_atual.loc[idx_e_atual, "despesas"] = float(ed_desp)
+                        df_atual.loc[idx_e_atual, "obs"] = str(ed_obs).strip()
+                        df_atual.loc[idx_e_atual, "extras"] = json.dumps(extras_atual, ensure_ascii=False)
+                        df_atual.loc[idx_e_atual, "usuario_alteracao"] = str(usuario_atual)
+                        df_atual.loc[idx_e_atual, "data_alteracao"] = str(agora)
+                        
+                        salvar_aba("lancamentos", df_atual)
                     st.success("Alterado com sucesso!")
                     st.rerun()
 
             if st.button("🗑️ Excluir Registro", use_container_width=True):
-                dono_excluido = str(df_lanc.loc[idx_e, "usuario"].iloc[0])
-                df_lanc = df_lanc.drop(idx_e)
-                mask_dia_corr = (df_lanc["data_ref"] == data_str) & (df_lanc["tipo"] == "CORRIDA") & (df_lanc["usuario"] == dono_excluido)
-                df_lanc.loc[mask_dia_corr, "qtd"] = range(1, mask_dia_corr.sum() + 1)
-                salvar_aba("lancamentos", df_lanc)
+                with st.spinner("Excluindo registro..."):
+                    _ler_aba_cache.clear()
+                    df_atual = ler_aba("lancamentos")
+                    idx_e_atual = df_atual[df_atual["id"] == id_edit].index
+                    dono_excluido = str(df_atual.loc[idx_e_atual, "usuario"].iloc[0])
+                    df_atual = df_atual.drop(idx_e_atual)
+                    mask_dia_corr = (df_atual["data_ref"] == data_str) & (df_atual["tipo"] == "CORRIDA") & (df_atual["usuario"] == dono_excluido)
+                    df_atual.loc[mask_dia_corr, "qtd"] = range(1, mask_dia_corr.sum() + 1)
+                    salvar_aba("lancamentos", df_atual)
                 st.warning("Excluído e numeração do dia reorganizada!")
                 st.rerun()
 
@@ -771,6 +798,7 @@ elif opcao == "Administração" and eh_admin:
         u_per = st.selectbox("Perfil", ["operador", "admin"])
         if st.form_submit_button("Criar Usuário"):
             if u_log and u_sen:
+                _ler_aba_cache.clear()
                 df_u = ler_aba("usuarios")
                 novo_u = pd.DataFrame([{"username": u_log.strip(), "senha": str(u_sen).strip(), "nome": u_nom.strip(), "perfil": u_per}])
                 salvar_aba("usuarios", pd.concat([df_u, novo_u], ignore_index=True))
@@ -781,6 +809,7 @@ elif opcao == "Administração" and eh_admin:
         n_col = st.text_input("Nome da Coluna (Ex: Pedágio, Vale)")
         if st.form_submit_button("Adicionar Coluna"):
             if n_col:
+                _ler_aba_cache.clear()
                 df_cols = ler_aba("colunas_extras")
                 nova_c = pd.DataFrame([{"nome_coluna": n_col.strip()}])
                 salvar_aba("colunas_extras", pd.concat([df_cols, nova_c], ignore_index=True))
