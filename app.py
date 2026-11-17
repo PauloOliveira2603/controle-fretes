@@ -133,9 +133,17 @@ def fmt_brl(valor):
 def limpar_latin1(texto):
     return str(texto).encode("latin-1", "replace").decode("latin-1")
 
+class RelatorioPDF(FPDF):
+    def footer(self):
+        self.set_y(-12)
+        self.set_font("Helvetica", "I", 8)
+        self.set_text_color(100, 100, 100)
+        self.cell(0, 8, limpar_latin1(f"Página {self.page_no()} de {{nb}}"), align="C")
+
 def gerar_pdf_relatorio(dt_ini, dt_fim, filtro_user, metricas, df_corridas):
-    pdf = FPDF(orientation="P", unit="mm", format="A4")
-    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf = RelatorioPDF(orientation="P", unit="mm", format="A4")
+    pdf.alias_nb_pages()
+    pdf.set_auto_page_break(auto=True, margin=18)
     pdf.add_page()
 
     pdf.set_fill_color(30, 58, 138)
@@ -202,6 +210,12 @@ def gerar_pdf_relatorio(dt_ini, dt_fim, filtro_user, metricas, df_corridas):
         pdf.set_text_color(20, 20, 20)
         pdf.set_font("Helvetica", "", 7.5)
         df_ord = df_corridas.sort_values(["data_ref", "id"])
+        
+        soma_col_din = 0.0
+        soma_col_pix_cart = 0.0
+        soma_col_gorj = 0.0
+        soma_col_desp = 0.0
+
         for row_idx, (_, r) in enumerate(df_ord.iterrows()):
             fill = row_idx % 2 == 1
             pdf.set_fill_color(248, 250, 252) if fill else pdf.set_fill_color(255, 255, 255)
@@ -211,13 +225,19 @@ def gerar_pdf_relatorio(dt_ini, dt_fim, filtro_user, metricas, df_corridas):
             except Exception:
                 dt_fmt = str(r["data_ref"])
 
+            din_val = float(r["dinheiro"])
             pix_cart_val = float(r["pix_bradesco"]) + float(r["pix_stones"]) + float(r["cartao"])
             desp_val = float(r["despesas"])
             gorj_val = float(r["gorjetas"])
+
+            soma_col_din += din_val
+            soma_col_pix_cart += pix_cart_val
+            soma_col_gorj += gorj_val
+            soma_col_desp += desp_val
             
             gorj_txt = "0.00"
             if gorj_val > 0:
-                f_gorj = extrair_forma_gorjeta(r.get("extras", "{}"), r["dinheiro"])
+                f_gorj = extrair_forma_gorjeta(r.get("extras", "{}"), din_val)
                 tag_g = "Din" if f_gorj == "Dinheiro" else "Dig"
                 gorj_txt = f"{gorj_val:.2f} ({tag_g})"
 
@@ -232,12 +252,24 @@ def gerar_pdf_relatorio(dt_ini, dt_fim, filtro_user, metricas, df_corridas):
             pdf.cell(w[0], 6, limpar_latin1(dt_fmt), border=1, align="C", fill=fill)
             pdf.cell(w[1], 6, limpar_latin1(f" {loc_txt}"), border=1, align="L", fill=fill)
             pdf.cell(w[2], 6, limpar_latin1(mot_txt), border=1, align="C", fill=fill)
-            pdf.cell(w[3], 6, limpar_latin1(f"{r['dinheiro']:.2f}"), border=1, align="R", fill=fill)
+            pdf.cell(w[3], 6, limpar_latin1(f"{din_val:.2f}"), border=1, align="R", fill=fill)
             pdf.cell(w[4], 6, limpar_latin1(f"{pix_cart_val:.2f}"), border=1, align="R", fill=fill)
             pdf.cell(w[5], 6, limpar_latin1(gorj_txt), border=1, align="R", fill=fill)
             pdf.cell(w[6], 6, limpar_latin1(f"{desp_val:.2f}"), border=1, align="R", fill=fill)
             pdf.cell(w[7], 6, limpar_latin1(origem_curta), border=1, align="C", fill=fill)
             pdf.ln()
+
+        # Linha de Total Geral da tabela de detalhamento
+        pdf.set_fill_color(226, 232, 240)
+        pdf.set_text_color(15, 23, 42)
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.cell(w[0] + w[1] + w[2], 7, limpar_latin1(" TOTAL GERAL DOS LANÇAMENTOS"), border=1, align="L", fill=True)
+        pdf.cell(w[3], 7, limpar_latin1(f"{soma_col_din:,.2f}"), border=1, align="R", fill=True)
+        pdf.cell(w[4], 7, limpar_latin1(f"{soma_col_pix_cart:,.2f}"), border=1, align="R", fill=True)
+        pdf.cell(w[5], 7, limpar_latin1(f"{soma_col_gorj:,.2f}"), border=1, align="R", fill=True)
+        pdf.cell(w[6], 7, limpar_latin1(f"{soma_col_desp:,.2f}"), border=1, align="R", fill=True)
+        pdf.cell(w[7], 7, limpar_latin1("-"), border=1, align="C", fill=True)
+        pdf.ln()
 
     return bytes(pdf.output())
 
