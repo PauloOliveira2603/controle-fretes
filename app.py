@@ -846,14 +846,14 @@ elif opcao == "Relatórios e Gráficos":
             df_c["Desp. Cartão/Conta"] = df_c["despesas"] - df_c["Desp. Dinheiro (Caixa)"]
 
             df_agrup = df_c.groupby("data_ref")[["Entradas (com Gorjetas)", "Desp. Dinheiro (Caixa)", "Desp. Cartão/Conta"]].sum().reset_index()
-            df_agrup = df_agrup.rename(columns={"data_ref": "Data"})
+            df_agrup["Data"] = pd.to_datetime(df_agrup["data_ref"], errors="coerce").dt.strftime("%d/%m/%Y").fillna(df_agrup["data_ref"].astype(str))
             fig_bar = px.bar(
                 df_agrup, x="Data", y=["Entradas (com Gorjetas)", "Desp. Dinheiro (Caixa)", "Desp. Cartão/Conta"], barmode="group",
                 title="Evolução Diária: Entradas x Despesas (Separadas por Origem)", labels={"value": "Valor (R$)", "variable": "Categoria"},
                 text_auto=True
             )
             fig_bar.update_traces(texttemplate="R$ %{y:,.2f}", textposition="outside")
-            fig_bar.update_layout(uniformtext_minsize=8, uniformtext_mode="show")
+            fig_bar.update_layout(uniformtext_minsize=8, uniformtext_mode="show", xaxis_type="category")
             st.plotly_chart(fig_bar, use_container_width=True)
 
             if eh_admin and filtro_rel_user == "Todos os Usuários":
@@ -865,7 +865,7 @@ elif opcao == "Relatórios e Gráficos":
                     text_auto=True
                 )
                 fig_comp.update_traces(texttemplate="R$ %{y:,.2f}", textposition="outside")
-                fig_comp.update_layout(uniformtext_minsize=8, uniformtext_mode="show")
+                fig_comp.update_layout(uniformtext_minsize=8, uniformtext_mode="show", xaxis_type="category")
                 st.plotly_chart(fig_comp, use_container_width=True)
 
         metricas_pdf = {
