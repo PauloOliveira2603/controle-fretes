@@ -117,6 +117,16 @@ def extrair_origem_despesa(extras_str):
         pass
     return "Cartão / Conta (Não sai do caixa)"
 
+def extrair_forma_gorjeta(extras_str, row_dinheiro=0.0):
+    try:
+        if pd.notna(extras_str) and str(extras_str).startswith("{"):
+            d = json.loads(str(extras_str))
+            if "_forma_gorjeta" in d:
+                return d["_forma_gorjeta"]
+    except Exception:
+        pass
+    return "Dinheiro" if float(row_dinheiro) > 0 else "PIX / Cartão"
+
 def fmt_brl(valor):
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
@@ -149,9 +159,9 @@ def gerar_pdf_relatorio(dt_ini, dt_fim, filtro_user, metricas, df_corridas):
     linhas_resumo = [
         ("Total de Corridas Realizadas", f"{metricas['qtd_corridas']}"),
         ("Faturamento Bruto (Corridas)", fmt_brl(metricas["tot_corr"])),
-        ("Total em Dinheiro", fmt_brl(metricas["tot_din"])),
-        ("Total PIX (Bradesco + Stones) + Cartão", fmt_brl(metricas["tot_pix_c"])),
-        ("Total Gorjetas", fmt_brl(metricas["tot_gorj"])),
+        ("Total em Dinheiro (Corridas + Gorjetas em Dinheiro)", fmt_brl(metricas["tot_din_com_gorj"])),
+        ("Total PIX + Cartão (Corridas + Gorjetas Digitais)", fmt_brl(metricas["tot_pix_com_gorj"])),
+        ("Total Gorjetas (Dinheiro: " + fmt_brl(metricas["gorj_din"]) + " | Digital: " + fmt_brl(metricas["gorj_dig"]) + ")", fmt_brl(metricas["tot_gorj"])),
         ("Total Diárias (Custo Operacional)", fmt_brl(metricas["tot_diar"])),
         ("Despesas Pagas em Dinheiro (Sai do Caixa)", fmt_brl(metricas["desp_caixa"])),
         ("Despesas no Cartão / Conta (Informativo)", fmt_brl(metricas["desp_cartao"])),
@@ -167,9 +177,9 @@ def gerar_pdf_relatorio(dt_ini, dt_fim, filtro_user, metricas, df_corridas):
             pdf.set_font("Helvetica", "B", 10)
         else:
             pdf.set_fill_color(245, 247, 250) if idx % 2 == 0 else pdf.set_fill_color(255, 255, 255)
-            pdf.set_font("Helvetica", "", 10)
-        pdf.cell(130, 7, limpar_latin1(f"  {label}"), border=1, fill=True)
-        pdf.cell(60, 7, limpar_latin1(f"{val}  "), border=1, align="R", fill=True, ln=True)
+            pdf.set_font("Helvetica", "", 9.5)
+        pdf.cell(135, 7, limpar_latin1(f"  {label}"), border=1, fill=True)
+        pdf.cell(55, 7, limpar_latin1(f"{val}  "), border=1, align="R", fill=True, ln=True)
 
     pdf.ln(6)
     pdf.set_font("Helvetica", "B", 12)
@@ -183,7 +193,7 @@ def gerar_pdf_relatorio(dt_ini, dt_fim, filtro_user, metricas, df_corridas):
         pdf.set_fill_color(30, 58, 138)
         pdf.set_text_color(255, 255, 255)
         pdf.set_font("Helvetica", "B", 8)
-        w = [20, 46, 22, 20, 20, 20, 20, 22]
+        w = [20, 44, 22, 20, 20, 22, 20, 22]
         headers = ["Data", "Local / Desc.", "Motorista", "Dinheiro", "PIX/Cart.", "Gorjeta", "Despesa", "Origem Desp."]
         for i, h in enumerate(headers):
             pdf.cell(w[i], 7, limpar_latin1(h), border=1, align="C", fill=True)
@@ -203,12 +213,20 @@ def gerar_pdf_relatorio(dt_ini, dt_fim, filtro_user, metricas, df_corridas):
 
             pix_cart_val = float(r["pix_bradesco"]) + float(r["pix_stones"]) + float(r["cartao"])
             desp_val = float(r["despesas"])
+            gorj_val = float(r["gorjetas"])
+            
+            gorj_txt = "0.00"
+            if gorj_val > 0:
+                f_gorj = extrair_forma_gorjeta(r.get("extras", "{}"), r["dinheiro"])
+                tag_g = "Din" if f_gorj == "Dinheiro" else "Dig"
+                gorj_txt = f"{gorj_val:.2f} ({tag_g})"
+
             origem_curta = "-"
             if desp_val > 0:
                 orig = extrair_origem_despesa(r.get("extras", "{}"))
                 origem_curta = "Dinheiro" if "Dinheiro" in orig else "Cartão/Conta"
 
-            loc_txt = str(r["local"])[:26]
+            loc_txt = str(r["local"])[:24]
             mot_txt = str(r["usuario"])[:12]
 
             pdf.cell(w[0], 6, limpar_latin1(dt_fmt), border=1, align="C", fill=fill)
@@ -216,7 +234,7 @@ def gerar_pdf_relatorio(dt_ini, dt_fim, filtro_user, metricas, df_corridas):
             pdf.cell(w[2], 6, limpar_latin1(mot_txt), border=1, align="C", fill=fill)
             pdf.cell(w[3], 6, limpar_latin1(f"{r['dinheiro']:.2f}"), border=1, align="R", fill=fill)
             pdf.cell(w[4], 6, limpar_latin1(f"{pix_cart_val:.2f}"), border=1, align="R", fill=fill)
-            pdf.cell(w[5], 6, limpar_latin1(f"{r['gorjetas']:.2f}"), border=1, align="R", fill=fill)
+            pdf.cell(w[5], 6, limpar_latin1(gorj_txt), border=1, align="R", fill=fill)
             pdf.cell(w[6], 6, limpar_latin1(f"{desp_val:.2f}"), border=1, align="R", fill=fill)
             pdf.cell(w[7], 6, limpar_latin1(origem_curta), border=1, align="C", fill=fill)
             pdf.ln()
@@ -382,6 +400,19 @@ if opcao == "Lançamentos do Dia":
     valor_txt = c_v2.text_input("Valor (R$)", placeholder="0,00", key=f"in_valor_{seq}")
     gorjetas_txt = c_v3.text_input("Gorjeta (R$)", placeholder="0,00", key=f"in_gorjeta_{seq}")
 
+    gorjeta_temp = converter_moeda(gorjetas_txt)
+    forma_gorjeta_default = 0 if tipo_pagamento == "Dinheiro" else 1
+    if gorjeta_temp is not None and gorjeta_temp > 0:
+        forma_gorjeta = st.radio(
+            "🪙 Como a gorjeta foi recebida?",
+            ["Dinheiro", "PIX / Cartão"],
+            index=forma_gorjeta_default,
+            horizontal=True,
+            key=f"in_fgorj_{seq}"
+        )
+    else:
+        forma_gorjeta = "Dinheiro" if tipo_pagamento == "Dinheiro" else "PIX / Cartão"
+
     origem_despesa = "Cartão / Conta (Não sai do caixa)"
     if tipo_pagamento == "Despesas (Gasolina/Manut.)":
         origem_despesa = st.radio(
@@ -447,6 +478,8 @@ if opcao == "Lançamentos do Dia":
             extras_dict = {col_n: float(valores_mapa[col_n]) for col_n in lista_extras}
             if despesas > 0:
                 extras_dict["_origem_despesa"] = origem_despesa
+            if gorjetas > 0:
+                extras_dict["_forma_gorjeta"] = forma_gorjeta
 
             with st.spinner("Salvando na planilha..."):
                 _ler_aba_cache.clear()
@@ -508,6 +541,10 @@ if opcao == "Lançamentos do Dia":
         for col_n in lista_extras:
             df_c[col_n] = df_c["extras"].apply(lambda x: json.loads(str(x)).get(col_n, 0.0) if pd.notna(x) and str(x).startswith("{") else 0.0)
         
+        df_c["Forma Gorj."] = df_c.apply(
+            lambda r: extrair_forma_gorjeta(r["extras"], r["dinheiro"]) if float(r["gorjetas"]) > 0 else "-",
+            axis=1
+        )
         df_c["Origem Desp."] = df_c.apply(
             lambda r: ("Dinheiro" if "Dinheiro" in extrair_origem_despesa(r["extras"]) else "Cartão/Conta") if float(r["despesas"]) > 0 else "-",
             axis=1
@@ -517,7 +554,7 @@ if opcao == "Lançamentos do Dia":
         df_c["Total Linha"] = df_c[cols_soma].sum(axis=1) - df_c["despesas"]
         
         df_exibir = df_c.rename(columns={"qtd": "Corrida Nº"})
-        cols_show = ["id", "Corrida Nº", "local", "dinheiro", "pix_bradesco", "pix_stones", "cartao", "gorjetas", "despesas", "Origem Desp."] + lista_extras + ["Total Linha", "obs", "usuario", "data_hora", "usuario_alteracao", "data_alteracao"]
+        cols_show = ["id", "Corrida Nº", "local", "dinheiro", "pix_bradesco", "pix_stones", "cartao", "gorjetas", "Forma Gorj.", "despesas", "Origem Desp."] + lista_extras + ["Total Linha", "obs", "usuario", "data_hora", "usuario_alteracao", "data_alteracao"]
         st.dataframe(df_exibir[cols_show], use_container_width=True, hide_index=True)
 
         with st.expander("✏️ Alterar ou Excluir Registro"):
@@ -529,6 +566,17 @@ if opcao == "Lançamentos do Dia":
             ed_ston_txt = st.text_input("PIX Stones", value=f"{float(df_lanc.loc[idx_e, 'pix_stones'].iloc[0]):.2f}".replace(".", ","), key=f"ed_ston_{id_edit}")
             ed_cart_txt = st.text_input("Cartão", value=f"{float(df_lanc.loc[idx_e, 'cartao'].iloc[0]):.2f}".replace(".", ","), key=f"ed_cart_{id_edit}")
             ed_gorj_txt = st.text_input("Gorjetas", value=f"{float(df_lanc.loc[idx_e, 'gorjetas'].iloc[0]):.2f}".replace(".", ","), key=f"ed_gorj_{id_edit}")
+            
+            fgorj_atual = extrair_forma_gorjeta(df_lanc.loc[idx_e, "extras"].iloc[0], df_lanc.loc[idx_e, "dinheiro"].iloc[0])
+            idx_fgorj = 0 if fgorj_atual == "Dinheiro" else 1
+            ed_fgorj = st.radio(
+                "Forma de Recebimento da Gorjeta (se houver)",
+                ["Dinheiro", "PIX / Cartão"],
+                index=idx_fgorj,
+                horizontal=True,
+                key=f"ed_fgorj_{id_edit}"
+            )
+
             ed_desp_txt = st.text_input("Despesas", value=f"{float(df_lanc.loc[idx_e, 'despesas'].iloc[0]):.2f}".replace(".", ","), key=f"ed_desp_{id_edit}")
             
             orig_atual = extrair_origem_despesa(df_lanc.loc[idx_e, "extras"].iloc[0])
@@ -564,10 +612,16 @@ if opcao == "Lançamentos do Dia":
                             extras_atual = json.loads(str(df_atual.loc[idx_e_atual, "extras"].iloc[0]))
                         except Exception:
                             extras_atual = {}
+                        
                         if float(ed_desp) > 0:
                             extras_atual["_origem_despesa"] = ed_orig_desp
                         else:
                             extras_atual.pop("_origem_despesa", None)
+
+                        if float(ed_gorj) > 0:
+                            extras_atual["_forma_gorjeta"] = ed_fgorj
+                        else:
+                            extras_atual.pop("_forma_gorjeta", None)
 
                         df_atual.loc[idx_e_atual, "local"] = str(ed_loc).strip()
                         df_atual.loc[idx_e_atual, "dinheiro"] = float(ed_din)
@@ -617,28 +671,40 @@ if opcao == "Lançamentos do Dia":
         res_diaria = val_diaria if not eh_admin else 0.0
 
     total_corridas_feitas = len(df_c)
-    t_din = df_c["dinheiro"].sum() if not df_c.empty else 0.0
-    t_pix_c = (df_c["pix_bradesco"].sum() + df_c["pix_stones"].sum() + df_c["cartao"].sum()) if not df_c.empty else 0.0
-    t_corr = t_din + t_pix_c
+    t_din_corr = df_c["dinheiro"].sum() if not df_c.empty else 0.0
+    t_pix_corr = (df_c["pix_bradesco"].sum() + df_c["pix_stones"].sum() + df_c["cartao"].sum()) if not df_c.empty else 0.0
+    t_corr = t_din_corr + t_pix_corr
     t_desp = df_c["despesas"].sum() if not df_c.empty else 0.0
     t_gorj = df_c["gorjetas"].sum() if not df_c.empty else 0.0
 
     if not df_c.empty:
+        mask_gorj_din = df_c.apply(lambda r: extrair_forma_gorjeta(r["extras"], r["dinheiro"]) == "Dinheiro", axis=1)
+        t_gorj_din = df_c.loc[mask_gorj_din, "gorjetas"].sum()
+        t_gorj_dig = t_gorj - t_gorj_din
+
         mask_desp_din = df_c["extras"].apply(lambda x: "Dinheiro" in extrair_origem_despesa(x))
         t_desp_din = df_c.loc[mask_desp_din, "despesas"].sum()
         t_desp_cart = t_desp - t_desp_din
     else:
+        t_gorj_din = 0.0
+        t_gorj_dig = 0.0
         t_desp_din = 0.0
         t_desp_cart = 0.0
 
+    t_din_total_gaveta = t_din_corr + t_gorj_din
+    t_pix_total_conta = t_pix_corr + t_gorj_dig
+
     st.metric("Total de Corridas Feitas no Dia", f"{total_corridas_feitas}")
-    st.metric("1. Total de Dinheiro (no dia)", f"R$ {t_din:.2f}")
-    st.metric("2. Total PIX + Cartão", f"R$ {t_pix_c:.2f}")
-    st.metric("3. Total Corridas (Dinheiro + PIX + Cartão)", f"R$ {t_corr:.2f}")
+    st.metric("1. Total em Dinheiro no Dia (Corridas + Gorjetas Dinheiro)", f"R$ {t_din_total_gaveta:.2f}")
+    st.metric("2. Total PIX + Cartão (Corridas + Gorjetas Digitais)", f"R$ {t_pix_total_conta:.2f}")
+    st.metric("3. Total Corridas sem Gorjeta (Dinheiro + PIX + Cartão)", f"R$ {t_corr:.2f}")
     st.metric("4. Total Corridas - Diária", f"R$ {(t_corr - res_diaria):.2f}")
-    st.metric("5. Total Caixa + Dinheiro - Diária - Desp. Dinheiro", f"R$ {(res_caixa + t_din - res_diaria - t_desp_din):.2f}")
-    st.metric("6. Total Dinheiro - Diária - Desp. Dinheiro (Acerto Espécie)", f"R$ {(t_din - res_diaria - t_desp_din):.2f}")
-    st.info(f"**Despesas Totais:** R$ {t_desp:.2f} (Cartão/Conta: R$ {t_desp_cart:.2f} | Dinheiro: R$ {t_desp_din:.2f}) | **Gorjetas:** R$ {t_gorj:.2f}")
+    st.metric("5. Total Caixa + Dinheiro (c/ Gorj. Din.) - Diária - Desp. Dinheiro", f"R$ {(res_caixa + t_din_total_gaveta - res_diaria - t_desp_din):.2f}")
+    st.metric("6. Total Dinheiro (c/ Gorj. Din.) - Diária - Desp. Dinheiro (Acerto Espécie)", f"R$ {(t_din_total_gaveta - res_diaria - t_desp_din):.2f}")
+    st.info(
+        f"**Despesas:** R$ {t_desp:.2f} (Cartão/Conta: R$ {t_desp_cart:.2f} | Dinheiro: R$ {t_desp_din:.2f})  |  "
+        f"**Gorjetas:** R$ {t_gorj:.2f} (Dinheiro: R$ {t_gorj_din:.2f} | PIX/Cartão: R$ {t_gorj_dig:.2f})"
+    )
     st.success(f"**Lucro Líquido Real de Caixa (Corridas + Gorjetas - Diária - Desp. Dinheiro): R$ {(t_corr + t_gorj - res_diaria - t_desp_din):.2f}**")
 
 elif opcao == "Relatórios e Gráficos":
@@ -677,12 +743,21 @@ elif opcao == "Relatórios e Gráficos":
         tot_gorj = df_c["gorjetas"].sum()
 
         if not df_c.empty:
+            mask_gorj_din = df_c.apply(lambda r: extrair_forma_gorjeta(r["extras"], r["dinheiro"]) == "Dinheiro", axis=1)
+            tot_gorj_din = df_c.loc[mask_gorj_din, "gorjetas"].sum()
+            tot_gorj_dig = tot_gorj - tot_gorj_din
+
             mask_desp_din = df_c["extras"].apply(lambda x: "Dinheiro" in extrair_origem_despesa(x))
             tot_desp_din = df_c.loc[mask_desp_din, "despesas"].sum()
             tot_desp_cart = tot_desp - tot_desp_din
         else:
+            tot_gorj_din = 0.0
+            tot_gorj_dig = 0.0
             tot_desp_din = 0.0
             tot_desp_cart = 0.0
+
+        tot_din_com_gorj = tot_din + tot_gorj_din
+        tot_pix_com_gorj = tot_pix_c + tot_gorj_dig
 
         res_operacional = tot_corr + tot_gorj - tot_diar
         lucro_real_caixa = tot_corr + tot_gorj - tot_diar - tot_desp_din
@@ -690,11 +765,11 @@ elif opcao == "Relatórios e Gráficos":
         c_m1, c_m2, c_m3 = st.columns(3)
         c_m1.metric("Total de Corridas no Período", f"{tot_qtd_corridas}")
         c_m2.metric("Faturamento Corridas", f"R$ {tot_corr:.2f}")
-        c_m3.metric("Total Gorjetas", f"R$ {tot_gorj:.2f}")
+        c_m3.metric("Total Gorjetas (Din: R$ " + f"{tot_gorj_din:.2f}" + " | Dig: R$ " + f"{tot_gorj_dig:.2f})", f"R$ {tot_gorj:.2f}")
 
         c_m4, c_m5, c_m6 = st.columns(3)
-        c_m4.metric("Total Dinheiro", f"R$ {tot_din:.2f}")
-        c_m5.metric("Total PIX + Cartão", f"R$ {tot_pix_c:.2f}")
+        c_m4.metric("Total Dinheiro (c/ Gorj. Dinheiro)", f"R$ {tot_din_com_gorj:.2f}")
+        c_m5.metric("Total PIX + Cartão (c/ Gorj. Digital)", f"R$ {tot_pix_com_gorj:.2f}")
         c_m6.metric("Total Diárias", f"R$ {tot_diar:.2f}")
 
         c_m7, c_m8, c_m9 = st.columns(3)
@@ -758,8 +833,10 @@ elif opcao == "Relatórios e Gráficos":
         metricas_pdf = {
             "qtd_corridas": tot_qtd_corridas,
             "tot_corr": tot_corr,
-            "tot_din": tot_din,
-            "tot_pix_c": tot_pix_c,
+            "tot_din_com_gorj": tot_din_com_gorj,
+            "tot_pix_com_gorj": tot_pix_com_gorj,
+            "gorj_din": tot_gorj_din,
+            "gorj_dig": tot_gorj_dig,
             "tot_gorj": tot_gorj,
             "tot_diar": tot_diar,
             "desp_caixa": tot_desp_din,
