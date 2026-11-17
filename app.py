@@ -164,12 +164,14 @@ def gerar_pdf_relatorio(dt_ini, dt_fim, filtro_user, metricas, df_corridas):
     pdf.ln(1)
 
     pdf.set_font("Helvetica", "", 10)
+    total_entradas_geral = metricas["tot_corr"] + metricas["tot_gorj"]
     linhas_resumo = [
         ("Total de Corridas Realizadas", f"{metricas['qtd_corridas']}"),
         ("Faturamento Bruto (Corridas)", fmt_brl(metricas["tot_corr"])),
         ("Total em Dinheiro (Corridas + Gorjetas em Dinheiro)", fmt_brl(metricas["tot_din_com_gorj"])),
         ("Total PIX + Cartão (Corridas + Gorjetas Digitais)", fmt_brl(metricas["tot_pix_com_gorj"])),
         ("Total Gorjetas (Dinheiro: " + fmt_brl(metricas["gorj_din"]) + " | Digital: " + fmt_brl(metricas["gorj_dig"]) + ")", fmt_brl(metricas["tot_gorj"])),
+        ("Entrada de Formas de Pagamento + Gorjetas", fmt_brl(total_entradas_geral)),
         ("Total Diárias (Custo Operacional)", fmt_brl(metricas["tot_diar"])),
         ("Despesas Pagas em Dinheiro (Sai do Caixa)", fmt_brl(metricas["desp_caixa"])),
         ("Despesas no Cartão / Conta (Informativo)", fmt_brl(metricas["desp_cartao"])),
@@ -179,9 +181,13 @@ def gerar_pdf_relatorio(dt_ini, dt_fim, filtro_user, metricas, df_corridas):
     ]
 
     for idx, (label, val) in enumerate(linhas_resumo):
-        destaque = idx >= 9
-        if destaque:
+        destaque_verde = idx >= 10
+        destaque_azul = idx == 5
+        if destaque_verde:
             pdf.set_fill_color(220, 252, 231)
+            pdf.set_font("Helvetica", "B", 10)
+        elif destaque_azul:
+            pdf.set_fill_color(219, 234, 254)
             pdf.set_font("Helvetica", "B", 10)
         else:
             pdf.set_fill_color(245, 247, 250) if idx % 2 == 0 else pdf.set_fill_color(255, 255, 255)
@@ -259,7 +265,6 @@ def gerar_pdf_relatorio(dt_ini, dt_fim, filtro_user, metricas, df_corridas):
             pdf.cell(w[7], 6, limpar_latin1(origem_curta), border=1, align="C", fill=fill)
             pdf.ln()
 
-        # Linha de Total Geral da tabela de detalhamento
         pdf.set_fill_color(226, 232, 240)
         pdf.set_text_color(15, 23, 42)
         pdf.set_font("Helvetica", "B", 8)
@@ -825,11 +830,11 @@ elif opcao == "Relatórios e Gráficos":
                 title=f"Entradas por Forma de Pagamento + Gorjetas (Total Geral: R$ {soma_geral_pie:,.2f})",
                 hole=0.38
             )
-            fig_pie.update_traces(
+            _ = fig_pie.update_traces(
                 texttemplate="<b>%{label}</b><br>R$ %{value:,.2f}<br>(%{percent})",
                 textposition="inside"
             )
-            fig_pie.add_annotation(
+            _ = fig_pie.add_annotation(
                 text=f"<b>Total Geral</b><br>R$ {soma_geral_pie:,.2f}",
                 x=0.5, y=0.5, font_size=14, showarrow=False
             )
@@ -846,8 +851,8 @@ elif opcao == "Relatórios e Gráficos":
                 title="Evolução Diária: Entradas x Despesas (Separadas por Origem)", labels={"value": "Valor (R$)", "variable": "Categoria"},
                 text_auto=True
             )
-            fig_bar.update_traces(texttemplate="R$ %{y:,.2f}", textposition="outside")
-            fig_bar.update_layout(uniformtext_minsize=8, uniformtext_mode="show")
+            _ = fig_bar.update_traces(texttemplate="R$ %{y:,.2f}", textposition="outside")
+            _ = fig_bar.update_layout(uniformtext_minsize=8, uniformtext_mode="show")
             st.plotly_chart(fig_bar, use_container_width=True)
 
             if eh_admin and filtro_rel_user == "Todos os Usuários":
@@ -858,8 +863,8 @@ elif opcao == "Relatórios e Gráficos":
                     title="Comparativo por Usuário: Entradas x Despesas", labels={"value": "Valor (R$)", "variable": "Categoria"},
                     text_auto=True
                 )
-                fig_comp.update_traces(texttemplate="R$ %{y:,.2f}", textposition="outside")
-                fig_comp.update_layout(uniformtext_minsize=8, uniformtext_mode="show")
+                _ = fig_comp.update_traces(texttemplate="R$ %{y:,.2f}", textposition="outside")
+                _ = fig_comp.update_layout(uniformtext_minsize=8, uniformtext_mode="show")
                 st.plotly_chart(fig_comp, use_container_width=True)
 
         metricas_pdf = {
@@ -880,7 +885,7 @@ elif opcao == "Relatórios e Gráficos":
         pdf_bytes = gerar_pdf_relatorio(dt_ini, dt_fim, filtro_rel_user, metricas_pdf, df_c)
 
         c_dl1, c_dl2 = st.columns(2)
-        c_dl1.download_button(
+        _ = c_dl1.download_button(
             "📄 Baixar Relatório Apresentável (PDF)",
             data=pdf_bytes,
             file_name=f"relatorio_fretes_{dt_ini}_{dt_fim}.pdf",
@@ -889,7 +894,7 @@ elif opcao == "Relatórios e Gráficos":
             use_container_width=True
         )
         csv = df_p.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig")
-        c_dl2.download_button(
+        _ = c_dl2.download_button(
             "📥 Baixar Planilha Bruta (CSV/Excel)",
             data=csv,
             file_name=f"relatorio_{dt_ini}_{dt_fim}.csv",
