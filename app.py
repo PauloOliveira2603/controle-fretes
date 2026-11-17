@@ -730,19 +730,20 @@ if opcao == "Lançamentos do Dia":
 
     t_din_total_gaveta = t_din_corr + t_gorj_din
     t_pix_total_conta = t_pix_corr + t_gorj_dig
+    t_corr_com_gorj = t_corr + t_gorj
 
     st.metric("Total de Corridas Feitas no Dia", f"{total_corridas_feitas}")
     st.metric("1. Total em Dinheiro no Dia (Corridas + Gorjetas Dinheiro)", f"R$ {t_din_total_gaveta:.2f}")
     st.metric("2. Total PIX + Cartão (Corridas + Gorjetas Digitais)", f"R$ {t_pix_total_conta:.2f}")
-    st.metric("3. Total Corridas sem Gorjeta (Dinheiro + PIX + Cartão)", f"R$ {t_corr:.2f}")
-    st.metric("4. Total Corridas - Diária", f"R$ {(t_corr - res_diaria):.2f}")
+    st.metric("3. Total Corridas com Gorjeta (Dinheiro + PIX + Cartão + Gorjeta)", f"R$ {t_corr_com_gorj:.2f}")
+    st.metric("4. Total Corridas com Gorjeta - Diária", f"R$ {(t_corr_com_gorj - res_diaria):.2f}")
     st.metric("5. Total Caixa + Dinheiro (c/ Gorj. Din.) - Diária - Desp. Dinheiro", f"R$ {(res_caixa + t_din_total_gaveta - res_diaria - t_desp_din):.2f}")
     st.metric("6. Total Dinheiro (c/ Gorj. Din.) - Diária - Desp. Dinheiro (Acerto Espécie)", f"R$ {(t_din_total_gaveta - res_diaria - t_desp_din):.2f}")
     st.info(
         f"**Despesas:** R$ {t_desp:.2f} (Cartão/Conta: R$ {t_desp_cart:.2f} | Dinheiro: R$ {t_desp_din:.2f})  |  "
         f"**Gorjetas:** R$ {t_gorj:.2f} (Dinheiro: R$ {t_gorj_din:.2f} | PIX/Cartão: R$ {t_gorj_dig:.2f})"
     )
-    st.success(f"**Lucro Líquido Real de Caixa (Corridas + Gorjetas - Diária - Desp. Dinheiro): R$ {(t_corr + t_gorj - res_diaria - t_desp_din):.2f}**")
+    st.success(f"**Lucro Líquido Real de Caixa (Corridas + Gorjetas - Diária - Desp. Dinheiro): R$ {(t_corr_com_gorj - res_diaria - t_desp_din):.2f}**")
 
 elif opcao == "Relatórios e Gráficos":
     st.header("📈 Relatórios por Período")
@@ -830,11 +831,11 @@ elif opcao == "Relatórios e Gráficos":
                 title=f"Entradas por Forma de Pagamento + Gorjetas (Total Geral: R$ {soma_geral_pie:,.2f})",
                 hole=0.38
             )
-            _ = fig_pie.update_traces(
+            fig_pie.update_traces(
                 texttemplate="<b>%{label}</b><br>R$ %{value:,.2f}<br>(%{percent})",
                 textposition="inside"
             )
-            _ = fig_pie.add_annotation(
+            fig_pie.add_annotation(
                 text=f"<b>Total Geral</b><br>R$ {soma_geral_pie:,.2f}",
                 x=0.5, y=0.5, font_size=14, showarrow=False
             )
@@ -851,8 +852,8 @@ elif opcao == "Relatórios e Gráficos":
                 title="Evolução Diária: Entradas x Despesas (Separadas por Origem)", labels={"value": "Valor (R$)", "variable": "Categoria"},
                 text_auto=True
             )
-            _ = fig_bar.update_traces(texttemplate="R$ %{y:,.2f}", textposition="outside")
-            _ = fig_bar.update_layout(uniformtext_minsize=8, uniformtext_mode="show")
+            fig_bar.update_traces(texttemplate="R$ %{y:,.2f}", textposition="outside")
+            fig_bar.update_layout(uniformtext_minsize=8, uniformtext_mode="show")
             st.plotly_chart(fig_bar, use_container_width=True)
 
             if eh_admin and filtro_rel_user == "Todos os Usuários":
@@ -863,8 +864,8 @@ elif opcao == "Relatórios e Gráficos":
                     title="Comparativo por Usuário: Entradas x Despesas", labels={"value": "Valor (R$)", "variable": "Categoria"},
                     text_auto=True
                 )
-                _ = fig_comp.update_traces(texttemplate="R$ %{y:,.2f}", textposition="outside")
-                _ = fig_comp.update_layout(uniformtext_minsize=8, uniformtext_mode="show")
+                fig_comp.update_traces(texttemplate="R$ %{y:,.2f}", textposition="outside")
+                fig_comp.update_layout(uniformtext_minsize=8, uniformtext_mode="show")
                 st.plotly_chart(fig_comp, use_container_width=True)
 
         metricas_pdf = {
@@ -885,7 +886,7 @@ elif opcao == "Relatórios e Gráficos":
         pdf_bytes = gerar_pdf_relatorio(dt_ini, dt_fim, filtro_rel_user, metricas_pdf, df_c)
 
         c_dl1, c_dl2 = st.columns(2)
-        _ = c_dl1.download_button(
+        c_dl1.download_button(
             "📄 Baixar Relatório Apresentável (PDF)",
             data=pdf_bytes,
             file_name=f"relatorio_fretes_{dt_ini}_{dt_fim}.pdf",
@@ -894,7 +895,7 @@ elif opcao == "Relatórios e Gráficos":
             use_container_width=True
         )
         csv = df_p.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig")
-        _ = c_dl2.download_button(
+        c_dl2.download_button(
             "📥 Baixar Planilha Bruta (CSV/Excel)",
             data=csv,
             file_name=f"relatorio_{dt_ini}_{dt_fim}.csv",
